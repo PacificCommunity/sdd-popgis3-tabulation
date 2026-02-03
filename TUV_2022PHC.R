@@ -8,7 +8,8 @@ source("setup.R")
 getwd()
 # Raw data directory
 dd <- "C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/Data/Tuvalu/2022dataset/"
-tab <- "C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/Data/Tuvalu/2022dataset/popgis_tables_corrected/"
+tab <- "C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/Data/Tuvalu/2022dataset/tables"
+
 
 # 1.IMPORT AND PREPARE CENSUS DATASETS ========================================
 # 1.1 Import Stata databases ----
@@ -1336,7 +1337,7 @@ pop1 <- pop %>%
 get_catlab(pop$hh_type)
 get_catlab(pop1$hh_type)
 
-variables <- names(hous)
+variables <- names(pop)
 labels_list <- list()
 
 for (variable in variables) {
