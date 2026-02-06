@@ -74,12 +74,10 @@ hh <- hous %>%
 # We will sort EA code out later when we get the originals
 codgeo <- hh %>%
   group_by(aid) %>%
-  summarise(cnt = n(), .groups = "drop") %>%
-  select(aid)
+  summarise(total_hh = n(), .groups = "drop")
+  
 
-## 2.3 TABLES =============================
-
-# Function to automate the PopGIS table generation =============================
+## 2.3 Function to automate the PopGIS table generation =============================
 # Define the function based on your exact workflow
 process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) {
   
@@ -98,10 +96,7 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   # 3. Join with Codgeo backbone (ensure 77 rows)
   final <- backbone %>%
     left_join(tab_df, by = "aid") %>%
-    mutate(across(everything(), ~replace_na(., 0))) %>%
-    # Calculate Total HH
-    mutate(tot_hh = rowSums(select(., -aid), na.rm = TRUE)) %>%
-    relocate(tot_hh, .after = aid)
+    mutate(across(everything(), ~replace_na(., 0))) 
   
   # 4. Validation Checks
   if (sum(is.na(final)) != 0) stop(paste("NAS WRONG in", file_name))
@@ -119,7 +114,7 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "aid")
 }
 
-## Automate categories map production --------
+## 2.4 Automate categories map production --------
 get_gis_map <- function(vec, var_name = "unknown") {
   # 1. Extract raw labels from Stata metadata
   labs <- attr(vec, "labels")
@@ -151,7 +146,64 @@ get_gis_map <- function(vec, var_name = "unknown") {
   return(setNames(clean_names, codes))
 }
 
-### Table H1. Dwelling Type by EA ----------------------------------------------
+## 2.5 Multi Select variables function and map names. -------
+
+get_multiselect_map <- function(data, prefix) {
+  # Find all columns belonging to this question
+  cols <- names(data)[str_detect(names(data), paste0("^", prefix, "__"))]
+  
+  if (length(cols) == 0) return(NULL)
+  
+  # Extract the numbers after the __ (the codes)
+  codes <- str_extract(cols, "(?<=__)\\d+$")
+  
+  # Extract the labels for these specific columns
+  raw_labels <- map_chr(cols, ~as.character(var_label(data[[.x]])))
+  
+  # Clean the labels (removing prefix text before : or ;)
+  clean_names <- map_chr(raw_labels, clean_multiselect_label)
+  
+  # Resolve collisions (duplicate 10-char names)
+  if (any(duplicated(clean_names))) {
+    clean_names <- make.unique(clean_names, sep = "_") %>% str_sub(1, 10)
+  }
+  
+  return(setNames(clean_names, codes))
+}
+
+process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_name) {
+  
+  # Aggregate by EA
+  tab_df <- data %>%
+    group_by(aid) %>%
+    summarise(
+      across(starts_with(paste0(prefix, "__")), ~sum(. == 1, na.rm = TRUE)),
+      .groups = "drop"
+    )
+  
+  # Clean column names to be just the digits (to match the map keys)
+  tab_df <- tab_df %>%
+    rename_with(~str_extract(., "\\d+$"), starts_with(prefix))
+  
+  # Rename using the map
+  tab_df <- tab_df %>%
+    rename_with(~rename_map[.], .cols = any_of(names(rename_map)))
+  
+  # Final backbone join
+  final <- backbone %>%
+    left_join(tab_df, by = "aid") %>%
+    mutate(across(everything(), ~replace_na(., 0))) %>%
+    relocate(total_hh, .after = aid)
+  
+  # Export
+  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "aid")
+  cat("Table", file_name, "tabulated successfully.\n")
+}
+
+
+## 2.6 TABLES =============================
+
+### Table H1. Dwelling Type by Atoll ----------------------------------------------
 
 print_labels(hh$i1_building)
 cat_map <- get_gis_map(hh$i1_building)
@@ -165,9 +217,9 @@ cat_map <- c(    "1" = "detach",
                 "99" = "oth",
                 "100" = "boat")
 
-process_popgis_tab(hh, codgeo, "i1_building", cat_map, "h1_lq_type" )
+process_popgis_tab(hh, codgeo, "i1_building", cat_map, "i1_building" )
 
-### Table H2. Housing tenure by EA ---------------------------------------------
+### Table H2. Housing tenure by Atoll ---------------------------------------------
 print_labels(hh$i2_type)
 cat_map <- get_gis_map(hh$i2_type)
 cat_map
@@ -181,21 +233,21 @@ cat_map<- c(    "1" = "loan",
 
 process_popgis_tab(hh, codgeo, "i2_type", cat_map, "i2_type" )
 
-### Table H3. Floor type by EA ---------------------------------------------
+### Table H3. Floor type by Atoll ---------------------------------------------
 print_labels(hh$i3_floor)
 cat_map <- get_gis_map(hh$i3_floor)
 cat_map
 
 process_popgis_tab(hh, codgeo, "i3_floor", cat_map, "i3_floor" )
 
-### Table H4. Roof type by EA ---------------------------------------------
+### Table H4. Roof type by Atoll ---------------------------------------------
 print_labels(hh$i4_roof)
 cat_map <- get_gis_map(hh$i4_roof)
 cat_map
 
 process_popgis_tab(hh, codgeo, "i4_roof", cat_map, "i4_roof" )
 
-### Table H5. Walls type by EA ---------------------------------------------
+### Table H5. Walls type by Atoll ---------------------------------------------
 print_labels(hh$i5_material_walls)
 cat_map <- get_gis_map(hh$i5_material_walls)
 cat_map
@@ -203,10 +255,397 @@ cat_map
 process_popgis_tab(hh, codgeo, "i5_material_walls", cat_map, "i5_material_walls" )
 
 
-### Table H6. Walls type by EA ---------------------------------------------
-print_labels(hh$i5_material_walls)
-cat_map <- get_gis_map(hh$i5_material_walls)
+### Table H6. Main Source of Drinking water by EA ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i6_drink_water") %>% print()
+var_map["1"] <- "pub_pip_in"  
+var_map["2"] <- "pub_pip_ot"  
+print(var_map)
+
+process_multiselect_popgis(hh, codgeo, "i6_drink_water", var_map, "i6_drink_water")
+
+### Table H6a. HH by Improved Sources of Drinking water by Atoll ------------------
+print_labels(hh$waterimpr)
+cat_map <- get_gis_map(hh$waterimpr)
 cat_map
 
-process_popgis_tab(hh, codgeo, "i5_material_walls", cat_map, "i5_material_walls" )
-i5_material_walls
+process_popgis_tab(hh, codgeo, "waterimpr", cat_map, "i6a_waterimpr" )
+
+### Table H7. Main Source of cooking water by Atoll ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i7_source_water") %>% print()
+var_map["1"] <- "pub_pip_in"  
+var_map["2"] <- "pub_pip_ot"  
+var_map["7"] <- "own_tnk_in"
+var_map["8"] <- "own_tnk_ot"
+print(var_map)
+
+process_multiselect_popgis(hh, codgeo, "i7_source_water", var_map, "i7_source_water")
+
+### Table H7a. HH by Cooking Water On Premises by Atoll ------------------
+print_labels(hh$waterprem)
+cat_map <- get_gis_map(hh$waterprem)
+cat_map
+
+process_popgis_tab(hh, codgeo, "waterprem", cat_map, "i7a_waterprem" )
+
+### Table H8. HH by Toilet Facilities by Atoll ------------------
+print_labels(hh$i8_toilet_facility)
+cat_map <- get_gis_map(hh$i8_toilet_facility)
+cat_map
+cat_map["1"] <- "flush_sew"  
+cat_map["2"] <- "flush_sept"
+cat_map["5"] <- "pl_slab"  
+cat_map["6"] <- "pl_open"  
+print(cat_map)
+process_popgis_tab(hh, codgeo, "i8_toilet_facility", cat_map, "i8_toilet_facility" )
+
+### Table H8a. HH by Improved Sanitation by Atoll ------------------
+print_labels(hh$sanitationimpr)
+cat_map <- get_gis_map(hh$sanitationimpr)
+cat_map
+
+process_popgis_tab(hh, codgeo, "sanitationimpr", cat_map, "i8a_sanitationimpr" )
+
+### Table H8b. HH by Shared Toilet by Atoll ------------------
+print_labels(hh$i8b_share_toilet)
+cat_map <- get_gis_map(hh$i8b_share_toilet)
+cat_map
+
+process_popgis_tab(hh, codgeo, "i8b_share_toilet", cat_map, "i8b_share_toilet" )
+
+### Table H9. Main cooking fuel by Atoll ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i9_cook_fuel") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "i9_cook_fuel", var_map, "i9_cook_fuel")
+
+### Table H10. Main source of electricity by Atoll ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i10_electricity") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "i10_electricity", var_map, "i10_electricity")
+
+### Table H11. Main source of lighting by Atoll ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i11_lighting") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "i11_lighting", var_map, "i11_lighting")
+
+### Table H12. Type of Waste Disposal by Atoll ---------------------------------------------
+var_map <- get_multiselect_map(hh, "i12_waste_disp") %>% print()
+var_map["1"] <- "pers_pub"  
+var_map["2"] <- "pers_yrslf" 
+print(var_map)
+process_multiselect_popgis(hh, codgeo, "i12_waste_disp", var_map, "i12_waste_disp")
+
+### Table H13. Household goods by Atoll ------------------------------------------
+var_map <- get_multiselect_map(hh, "i13_hhld_goods") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "i13_hhld_goods", var_map, "i13_hhld_goods")
+
+### Table H13g. Household by Access to Internet by Atoll --------------------------------
+print_labels(hh$i13g_internet)
+cat_map <- get_gis_map(hh$i13g_internet)
+cat_map
+
+process_popgis_tab(hh, codgeo, "i13g_internet", cat_map, "i13g_internet" )
+
+
+### Table H14. Household by Main source of income by Atoll --------------------------------
+var_map <- get_multiselect_map(hh, "i15a_hh_income") %>% print()
+var_map["4"] <- "rent_ll"  
+var_map["5"] <- "rent_hl" 
+print(var_map)
+process_multiselect_popgis(hh, codgeo, "i15a_hh_income", var_map, "i15a_hh_income")
+
+### Table H17a. HH by environment problem by Atoll -------------------------------
+var_map <- get_multiselect_map(hh, "i17a_environ_problem") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "i17a_environ_problem", var_map, "i17a_environ_problem")
+
+### Table H17b. Environment problem limit of income by Atoll -------------------------------
+print_labels(hh$I17b_limit_income)
+cat_map <- get_gis_map(hh$I17b_limit_income)
+cat_map
+
+process_popgis_tab(hh, codgeo, "I17b_limit_income", cat_map, "I17b_limit_income" )
+
+### Table H17c. Environment problem cause to move by Atoll -------------------------------
+print_labels(hh$I17c_cause_2move)
+cat_map <- get_gis_map(hh$I17c_cause_2move)
+cat_map
+
+process_popgis_tab(hh, codgeo, "I17c_cause_2move", cat_map, "I17c_cause_2move" )
+
+### Table H17d. Community affected  in the last 10 years by Atoll -------------------------------
+var_map <- get_multiselect_map(hh, "I17d_affected_10yrs") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "I17d_affected_10yrs", var_map, "I17d_affected_10yrs")
+
+
+### Table H18. HH by Agriculture activity by Atoll -------------------------------
+var_map <- get_multiselect_map(hh, "j1_agricuture") %>% print()
+
+process_multiselect_popgis(hh, codgeo, "j1_agricuture", var_map, "j1_agricuture")
+
+### Table H18a. Main Purpose Growing crops by Atoll ------------------------------------
+print_labels(hh$j1a_growcrops)
+cat_map <- get_gis_map(hh$j1a_growcrops)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1a_growcrops", cat_map, "j1a_growcrops" )
+
+### Table H18b. Main Purpose fishing by Atoll ------------------------------------
+print_labels(hh$j1b_fishing)
+cat_map <- get_gis_map(hh$j1b_fishing)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1b_fishing", cat_map, "j1b_fishing" )
+
+### Table H18c. Main Purpose Raising livestock by Atoll ------------------------------------
+print_labels(hh$j1c_livestock)
+cat_map <- get_gis_map(hh$j1c_livestock)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1c_livestock", cat_map, "j1c_livestock" )
+
+### Table H18d. Main Purpose Freshwater aquaculture by Atoll ------------------------------------
+print_labels(hh$j1d_freshwater_aqua)
+cat_map <- get_gis_map(hh$j1d_freshwater_aqua)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1d_freshwater_aqua", cat_map, "j1d_freshwater_aqua")
+
+
+### Table H18e. Main Purpose Marine aquaculture by Atoll ------------------------------------
+print_labels(hh$j1e_marine_aqua)
+cat_map <- get_gis_map(hh$j1e_marine_aqua)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1e_marine_aqua", cat_map, "j1e_marine_aqua")
+
+### Table H18f. Main Purpose Forestry by Atoll ------------------------------------
+print_labels(hh$j1f_forestry)
+cat_map <- get_gis_map(hh$j1f_forestry)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1f_forestry", cat_map, "j1f_forestry")
+
+### Table H18g. Main Purpose Handicraft by Atoll ------------------------------------
+print_labels(hh$j1g_handicraft)
+cat_map <- get_gis_map(hh$j1g_handicraft)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1g_handicraft", cat_map, "j1g_handicraft")
+
+### Table H18h. Main Purpose Hunting by Atoll ------------------------------------
+print_labels(hh$j1g_hunting)
+cat_map <- get_gis_map(hh$j1g_hunting)
+cat_map
+
+process_popgis_tab(hh, codgeo, "j1g_hunting", cat_map, "j1g_hunting")
+
+
+# 3. PERSON DATASET =============================================================
+
+## 3.1 Prepare dataset ------ 
+# Keep Private households
+pop <- pop %>% 
+  filter(hhtype == 1) %>% 
+  rename(aid = Atoll_island)
+
+print_labels(pop$hhtype)
+
+
+variables <- names(pop)
+labels_list <- list()
+
+for (variable in variables) {
+  if (variable %in% names(pop)) {
+    labels_list[[variable]] <- get_catlab(pop[[variable]])
+  } else {
+    warning(paste("Variable", variable, "not found in the dataset."))
+  }
+}
+
+# Print the labels
+for (variable in names(labels_list)) {
+  if (!is.null(labels_list[[variable]])) {
+    cat("Labels for variable", variable, ":\n")
+    print(labels_list[[variable]])
+    cat("\n")
+  } else {
+    cat("No labels found for variable", variable, "\n\n")
+  }
+}
+labels_list
+
+## 3.2 Define functions -------
+
+get_pop_map <- function(vec, var_name = "unknown") {
+  # 1. Extract labels from Stata/Server metadata
+  labs <- attr(vec, "labels")
+  if (is.null(labs)) {
+    warning(paste("No labels found for", var_name))
+    return(NULL)
+  }
+  
+  codes <- as.character(labs)
+  raw_names <- names(labs)
+  
+  # 2. Clean the names with the split-and-truncate logic
+  clean_names <- map_chr(raw_names, function(x) {
+    # Split by : or ; and take the last part (the category)
+    clean <- str_split(x, "[:;]")[[1]] %>% last() %>% str_trim()
+    
+    clean %>%
+      str_to_lower() %>%
+      str_replace_all("[^a-z0-9 ]", "") %>%
+      str_replace_all("\\s+", "_") %>%
+      str_sub(1, 8) %>%        # Max 8 chars to allow for "t_", "m_", "f_"
+      str_replace("_$", "")
+  })
+  
+  # 3. Handle Duplicates
+  if (any(duplicated(clean_names))) {
+    message(paste("! Collision in", var_name, "- resolving duplicates..."))
+    clean_names <- make.unique(clean_names, sep = "_") %>% str_sub(1, 10)
+  }
+  
+  return(setNames(clean_names, codes))
+}
+
+process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
+  
+  # 1. Generate the base GIS map
+  base_map <- get_pop_map(data[[var_name]], var_name)
+  if (is.null(base_map)) stop(paste("Metadata missing for:", var_name))
+  
+  # 2. Prepare long data
+  tab_long <- data %>%
+    filter(!is.na(!!sym(var_name)), !is.na(r2_sex)) %>%
+    mutate(sex_prefix = case_when(r2_sex == 1 ~ "m", r2_sex == 2 ~ "f"))
+  
+  # 3. Aggregation
+  counts_all <- bind_rows(
+    tab_long %>% count(aid, sex_prefix, !!sym(var_name)) %>% rename(prefix = sex_prefix),
+    tab_long %>% count(aid, !!sym(var_name)) %>% mutate(prefix = "t")
+  ) %>%
+    mutate(col_key = paste0(prefix, "_", !!sym(var_name)))
+  
+  # 4. Pivot Wide
+  p_table <- counts_all %>%
+    select(aid, col_key, n) %>%
+    pivot_wider(names_from = col_key, values_from = n, values_fill = 0)
+  
+  # 5. CREATE AND APPLY MAP IMMEDIATELY
+  # This ensures p_table has the real names (t_kiribati, etc.) before we proceed
+  final_rename_map <- c(
+    setNames(paste0("t_", base_map), paste0("t_", names(base_map))),
+    setNames(paste0("m_", base_map), paste0("m_", names(base_map))),
+    setNames(paste0("f_", base_map), paste0("f_", names(base_map)))
+  )
+  
+  # Apply renaming here
+  p_table <- p_table %>%
+    rename_with(~final_rename_map[.], .cols = any_of(names(final_rename_map)))
+  
+  # 6. Final Assembly with Backbone
+  final_df <- backbone %>%
+    left_join(p_table, by = "aid") %>%
+    mutate(across(everything(), ~replace_na(., 0))) %>%
+    # Calculate Totals using the NEW names
+    mutate(
+      t_pop = rowSums(select(., starts_with("t_")), na.rm = TRUE),
+      m_pop = rowSums(select(., starts_with("m_")), na.rm = TRUE),
+      f_pop = rowSums(select(., starts_with("f_")), na.rm = TRUE)
+    ) %>%
+    relocate(t_pop, m_pop, f_pop, .after = aid)
+  
+  # --- VERIFICATION BLOCK (Using assigned names) ---
+  # This sums every numeric column in the final table
+  cat("\n==========================================\n")
+  cat("VERIFICATION TOTALS FOR:", file_name, "\n")
+  cat("==========================================\n")
+  
+  check_totals <- final_df %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    pivot_longer(everything(), names_to = "Indicator", values_to = "National_Total")
+  
+  print(as.data.frame(check_totals))
+  cat("==========================================\n\n")
+  
+  # 7. Export
+  write.xlsx(final_df, 
+             file = paste0(tab, file_name, ".xlsx"), 
+             sheetName = "aid", 
+             rowNames = FALSE, 
+             overwrite = TRUE)
+}
+
+
+## 3.3 POPPULATION TABLES ------------------------------------------------------
+### Table P1.  Population by Ethnic Group and by Sex ----
+print_labels(pop$c1_ethnic)
+print_labels(pop$r2_sex)
+
+cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
+
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "c1_ethnic", 
+  file_name = "c1_ethnic"
+)
+
+### Table P3. Population by citizenship and by Sex ----- 
+
+print_labels(pop$c3_citizen)
+print_labels(pop$r2_sex)
+
+cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
+
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "c3_citizen", 
+  file_name = "c3_citizen"
+)
+
+### Table P3. Population by citizenship and by Sex ----- 
+
+print_labels(pop$c3_citizen)
+print_labels(pop$r2_sex)
+
+cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
+
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "c3_citizen", 
+  file_name = "c3_citizen"
+)
+
+## Table P4. Population 15 years and Over by Sex and Marital Status ----
+# define population 15+
+pop15 <- pop %>% 
+  filter(r3_age > 14)
+
+
+get_pop_map(pop$c4_marital_status) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "c4_marital_status", 
+  file_name = "c4_marital_status"
+)
+
+## Table P9.  Population by Relationship to Head of Household and by Sex -----
+
+get_pop_map(pop$r4_relat) %>% print()
+
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "r4_relat", 
+  file_name = "r4_relat"
+)
+
+##
