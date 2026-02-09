@@ -581,23 +581,29 @@ process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
 
 
 ## 3.3 POPPULATION TABLES ------------------------------------------------------
-### Table P1.  Population by Ethnic Group and by Sex ----
-print_labels(pop$c1_ethnic)
-print_labels(pop$r2_sex)
+### Table P1. Population by 5–year age group by sex ----
+get_pop_map(pop$ilo_age_5yrbands) %>% print()
+print_labels(pop$ilo_age_5yrbands)
 
-cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "ilo_age_5yrbands", 
+  file_name = "p1_ilo_age_5yrbands"
+)
+
+### Table P2. Population by Ethnic Group and by Sex ----
+
+get_pop_map(pop$c1_ethnic) %>% print()
 
 process_pop_sex_tab(
   data = pop, 
   backbone = codgeo, 
   var_name = "c1_ethnic", 
-  file_name = "c1_ethnic"
+  file_name = "p2_ethnic"
 )
 
 ### Table P3. Population by citizenship and by Sex ----- 
-
-print_labels(pop$c3_citizen)
-print_labels(pop$r2_sex)
 
 cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
 
@@ -605,24 +611,11 @@ process_pop_sex_tab(
   data = pop, 
   backbone = codgeo, 
   var_name = "c3_citizen", 
-  file_name = "c3_citizen"
+  file_name = "p3_citizen"
 )
 
-### Table P3. Population by citizenship and by Sex ----- 
 
-print_labels(pop$c3_citizen)
-print_labels(pop$r2_sex)
-
-cat_map <- get_pop_map(pop$c1_ethnic) %>% print()
-
-process_pop_sex_tab(
-  data = pop, 
-  backbone = codgeo, 
-  var_name = "c3_citizen", 
-  file_name = "c3_citizen"
-)
-
-## Table P4. Population 15 years and Over by Sex and Marital Status ----
+### Table P4. Population 15 years and Over by Sex and Marital Status ----
 # define population 15+
 pop15 <- pop %>% 
   filter(r3_age > 14)
@@ -634,10 +627,10 @@ process_pop_sex_tab(
   data = pop15, 
   backbone = codgeo, 
   var_name = "c4_marital_status", 
-  file_name = "c4_marital_status"
+  file_name = "p4_marital_status"
 )
 
-## Table P9.  Population by Relationship to Head of Household and by Sex -----
+### Table P5.  Population by Relationship to Head of Household and by Sex -----
 
 get_pop_map(pop$r4_relat) %>% print()
 
@@ -645,7 +638,160 @@ process_pop_sex_tab(
   data = pop, 
   backbone = codgeo, 
   var_name = "r4_relat", 
-  file_name = "r4_relat"
+  file_name = "p5_relat"
 )
 
-##
+### Table P6a. Population by Individual classified as disbaled (WG statistic, Min. 1/6 of Q ==3 or 4) ----
+pop5 <- pop %>% 
+  filter(r3_age > 4)
+get_pop_map(pop$d1_seeing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "wg_disabled", 
+  file_name = "p6a_wg_disabled"
+)
+
+### Table 6b. Population 5 years old and over by Difficulty in Seeing and by Sex ----
+get_pop_map(pop$d1_seeing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d1_seeing", 
+  file_name = "p6b_seeing"
+)
+
+### Table 6c. Population 5 years old and over by Difficulty in Hearing and by Sex ----
+get_pop_map(pop$d2_hearing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d2_hearing", 
+  file_name = "p6c_hearing"
+)
+
+### Table 6d. Population 5 years old and over by Difficulty in Mobility and by Sex ----
+get_pop_map(pop$d3_mobility) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d3_mobility", 
+  file_name = "p6d_mobility"
+)
+
+### Table 6e. Population 5 years old and over by Difficulty in Remembering and by Sex ----
+get_pop_map(pop$d4_memory) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d4_memory", 
+  file_name = "p6e_memory"
+)
+
+### Table 6f. Population 5 years old and over by Difficulty in Selfcare and by Sex ----
+get_pop_map(pop$d5_sefcare) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d5_sefcare", 
+  file_name = "p6f_sefcare"
+)
+
+### Table 6g. Population 5 years old and over by Difficulty in Communication and by Sex ----
+get_pop_map(pop$d6_communication) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "d6_communication", 
+  file_name = "p6g_communication"
+)
+
+### Table 7. Population by Urban/Rural by 5–year age group by internet access ---- 
+pop10 <- pop %>% 
+  filter(r3_age > 9)
+
+### Table 7. Population by Urban/Rural by 5–year age group by internet access ---- 
+pop10 <- pop %>% 
+  filter(r3_age > 9)
+
+get_pop_map(pop$h1_internet_access) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo, 
+  var_name = "h1_internet_access", 
+  file_name = "p7_internet"
+)
+
+### Table 7a. Population by place of internet access ---- 
+
+get_pop_map(pop$h2_location) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo, 
+  var_name = "h2_location", 
+  file_name = "p7a_int_place"
+)
+
+### Table 8. Population by own mobile phone ---- 
+
+get_pop_map(pop$h3_mobile_phone) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo, 
+  var_name = "h3_mobile_phone", 
+  file_name = "p8_mobile_phone"
+)
+
+### Table 9. Population by main activity ---- 
+
+get_pop_map(pop$lf1) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "lf1", 
+  file_name = "p9_main_act"
+)
+
+### Table 10. Population by main activity ---- 
+
+get_pop_map(pop$ilo_lfs) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "ilo_lfs", 
+  file_name = "p10_lfstatus"
+)
+
+### Table 11. Population by Degree of Labour market attachment by Atol ---- 
+
+get_pop_map(pop$ilo_olf_dlma) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "ilo_olf_dlma", 
+  file_name = "p11_olf_dlma"
+)
+
+### Table 12. Population by Status in employment (ICSE 93) – Main job by Atol ---- 
+
+get_pop_map(pop$ilo_job1_ste_icse93) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "ilo_job1_ste_icse93", 
+  file_name = "p12_ilo_job1_ste"
+)
