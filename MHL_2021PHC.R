@@ -95,7 +95,7 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   
   # 3. Join with Codgeo backbone (ensure 77 rows)
   final <- backbone %>%
-    left_join(tab_df, by = "aid") %>%
+    full_join(tab_df, by = "aid") %>%
     mutate(across(everything(), ~replace_na(., 0))) 
   
   # 4. Validation Checks
@@ -148,6 +148,19 @@ get_gis_map <- function(vec, var_name = "unknown") {
 
 ## 2.5 Multi Select variables function and map names. -------
 
+clean_multiselect_label <- function(label) {
+  # 1. Split by : or ; and take the last part
+  clean_text <- str_split(label, "[:;]")[[1]] %>% last() %>% str_trim()
+  
+  # 2. Clean for GIS (lowercase, alphanumeric, 10 chars)
+  clean_text %>%
+    str_to_lower() %>%
+    str_replace_all("[^a-z0-9 ]", "") %>%
+    str_replace_all("\\s+", "_") %>%
+    str_sub(1, 10) %>%
+    str_replace("_$", "")
+}
+
 get_multiselect_map <- function(data, prefix) {
   # Find all columns belonging to this question
   cols <- names(data)[str_detect(names(data), paste0("^", prefix, "__"))]
@@ -191,7 +204,7 @@ process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_n
   
   # Final backbone join
   final <- backbone %>%
-    left_join(tab_df, by = "aid") %>%
+    full_join(tab_df, by = "aid") %>%
     mutate(across(everything(), ~replace_na(., 0))) %>%
     relocate(total_hh, .after = aid)
   
@@ -224,7 +237,7 @@ print_labels(hh$i2_type)
 cat_map <- get_gis_map(hh$i2_type)
 cat_map
 cat_map<- c(    "1" = "loan",
-                "2" = "free",
+                "2" = "leasefree",
                 "3" = "rented",
                 "4" = "pub_rent",
                 "5" = "no_pay",
@@ -263,7 +276,7 @@ print(var_map)
 
 process_multiselect_popgis(hh, codgeo, "i6_drink_water", var_map, "i6_drink_water")
 
-### Table H6a. HH by Improved Sources of Drinking water by Atoll ------------------
+### Table H6a. Improved Sources of Drinking water by Atoll ------------------
 print_labels(hh$waterimpr)
 cat_map <- get_gis_map(hh$waterimpr)
 cat_map
@@ -280,14 +293,14 @@ print(var_map)
 
 process_multiselect_popgis(hh, codgeo, "i7_source_water", var_map, "i7_source_water")
 
-### Table H7a. HH by Cooking Water On Premises by Atoll ------------------
+### Table H7a. Cooking Water On Premises by Atoll ------------------
 print_labels(hh$waterprem)
 cat_map <- get_gis_map(hh$waterprem)
 cat_map
 
 process_popgis_tab(hh, codgeo, "waterprem", cat_map, "i7a_waterprem" )
 
-### Table H8. HH by Toilet Facilities by Atoll ------------------
+### Table H8. Toilet Facilities by Atoll ------------------
 print_labels(hh$i8_toilet_facility)
 cat_map <- get_gis_map(hh$i8_toilet_facility)
 cat_map
@@ -298,16 +311,17 @@ cat_map["6"] <- "pl_open"
 print(cat_map)
 process_popgis_tab(hh, codgeo, "i8_toilet_facility", cat_map, "i8_toilet_facility" )
 
-### Table H8a. HH by Improved Sanitation by Atoll ------------------
+### Table H8a. Improved Sanitation by Atoll ------------------
 print_labels(hh$sanitationimpr)
 cat_map <- get_gis_map(hh$sanitationimpr)
 cat_map
-
 process_popgis_tab(hh, codgeo, "sanitationimpr", cat_map, "i8a_sanitationimpr" )
 
-### Table H8b. HH by Shared Toilet by Atoll ------------------
+### Table H8b. Shared Toilet by Atoll ------------------
 print_labels(hh$i8b_share_toilet)
 cat_map <- get_gis_map(hh$i8b_share_toilet)
+cat_map["1"] <- "shared"  
+cat_map["2"] <- "not_shared"
 cat_map
 
 process_popgis_tab(hh, codgeo, "i8b_share_toilet", cat_map, "i8b_share_toilet" )
@@ -319,18 +333,20 @@ process_multiselect_popgis(hh, codgeo, "i9_cook_fuel", var_map, "i9_cook_fuel")
 
 ### Table H10. Main source of electricity by Atoll ---------------------------------------------
 var_map <- get_multiselect_map(hh, "i10_electricity") %>% print()
+var_map["0"] <- "no_elect"
 
 process_multiselect_popgis(hh, codgeo, "i10_electricity", var_map, "i10_electricity")
 
 ### Table H11. Main source of lighting by Atoll ---------------------------------------------
 var_map <- get_multiselect_map(hh, "i11_lighting") %>% print()
-
+var_map["0"] <- "no_light"
 process_multiselect_popgis(hh, codgeo, "i11_lighting", var_map, "i11_lighting")
 
 ### Table H12. Type of Waste Disposal by Atoll ---------------------------------------------
 var_map <- get_multiselect_map(hh, "i12_waste_disp") %>% print()
 var_map["1"] <- "pers_pub"  
 var_map["2"] <- "pers_yrslf" 
+var_map["101"] <- "not_wd"
 print(var_map)
 process_multiselect_popgis(hh, codgeo, "i12_waste_disp", var_map, "i12_waste_disp")
 
@@ -339,22 +355,23 @@ var_map <- get_multiselect_map(hh, "i13_hhld_goods") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "i13_hhld_goods", var_map, "i13_hhld_goods")
 
-### Table H13g. Household by Access to Internet by Atoll --------------------------------
+### Table H13g. Access to Internet by Atoll --------------------------------
 print_labels(hh$i13g_internet)
 cat_map <- get_gis_map(hh$i13g_internet)
-cat_map
+cat_map["2"] <- "no_int"
 
 process_popgis_tab(hh, codgeo, "i13g_internet", cat_map, "i13g_internet" )
 
 
-### Table H14. Household by Main source of income by Atoll --------------------------------
+### Table H14. Main source of income by Atoll --------------------------------
 var_map <- get_multiselect_map(hh, "i15a_hh_income") %>% print()
 var_map["4"] <- "rent_ll"  
 var_map["5"] <- "rent_hl" 
+var_map["0"] <- "no_inc"
 print(var_map)
 process_multiselect_popgis(hh, codgeo, "i15a_hh_income", var_map, "i15a_hh_income")
 
-### Table H17a. HH by environment problem by Atoll -------------------------------
+### Table H17a. environment problem by Atoll -------------------------------
 var_map <- get_multiselect_map(hh, "i17a_environ_problem") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "i17a_environ_problem", var_map, "i17a_environ_problem")
@@ -362,24 +379,24 @@ process_multiselect_popgis(hh, codgeo, "i17a_environ_problem", var_map, "i17a_en
 ### Table H17b. Environment problem limit of income by Atoll -------------------------------
 print_labels(hh$I17b_limit_income)
 cat_map <- get_gis_map(hh$I17b_limit_income)
-cat_map
+cat_map["2"] <- "no_probl" 
 
-process_popgis_tab(hh, codgeo, "I17b_limit_income", cat_map, "I17b_limit_income" )
+process_popgis_tab(hh, codgeo, "I17b_limit_income", cat_map, "i17b_limit_income" )
 
 ### Table H17c. Environment problem cause to move by Atoll -------------------------------
 print_labels(hh$I17c_cause_2move)
 cat_map <- get_gis_map(hh$I17c_cause_2move)
-cat_map
+cat_map["2"] <- "no_probl" 
 
-process_popgis_tab(hh, codgeo, "I17c_cause_2move", cat_map, "I17c_cause_2move" )
+process_popgis_tab(hh, codgeo, "I17c_cause_2move", cat_map, "i17c_cause_2move" )
 
 ### Table H17d. Community affected  in the last 10 years by Atoll -------------------------------
 var_map <- get_multiselect_map(hh, "I17d_affected_10yrs") %>% print()
 
-process_multiselect_popgis(hh, codgeo, "I17d_affected_10yrs", var_map, "I17d_affected_10yrs")
+process_multiselect_popgis(hh, codgeo, "I17d_affected_10yrs", var_map, "i17d_affected_10yrs")
 
 
-### Table H18. HH by Agriculture activity by Atoll -------------------------------
+### Table H18. Agriculture activity by Atoll -------------------------------
 var_map <- get_multiselect_map(hh, "j1_agricuture") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "j1_agricuture", var_map, "j1_agricuture")
@@ -451,6 +468,9 @@ pop <- pop %>%
   rename(aid = Atoll_island)
 
 print_labels(pop$hhtype)
+
+# To avoid including hh totals in the backbone therefore all the pop tables
+codgeo <- codgeo %>% select(aid)
 
 
 variables <- names(pop)
@@ -630,7 +650,7 @@ process_pop_sex_tab(
   file_name = "p4_marital_status"
 )
 
-### Table P5.  Population by Relationship to Head of Household and by Sex -----
+### Table P5. Population by Relationship to Head of Household and by Sex -----
 
 get_pop_map(pop$r4_relat) %>% print()
 
@@ -641,7 +661,7 @@ process_pop_sex_tab(
   file_name = "p5_relat"
 )
 
-### Table P6a. Population by Individual classified as disbaled (WG statistic, Min. 1/6 of Q ==3 or 4) ----
+### Table P6a. Population by Individual classified as disabled (WG statistic, Min. 1/6 of Q ==3 or 4) ----
 pop5 <- pop %>% 
   filter(r3_age > 4)
 get_pop_map(pop$d1_seeing) %>% print()
@@ -653,7 +673,7 @@ process_pop_sex_tab(
   file_name = "p6a_wg_disabled"
 )
 
-### Table 6b. Population 5 years old and over by Difficulty in Seeing and by Sex ----
+### Table P6b. Population 5 years old and over by Difficulty in Seeing and by Sex ----
 get_pop_map(pop$d1_seeing) %>% print()
 
 process_pop_sex_tab(
@@ -663,7 +683,7 @@ process_pop_sex_tab(
   file_name = "p6b_seeing"
 )
 
-### Table 6c. Population 5 years old and over by Difficulty in Hearing and by Sex ----
+### Table P6c. Population 5 years old and over by Difficulty in Hearing and by Sex ----
 get_pop_map(pop$d2_hearing) %>% print()
 
 process_pop_sex_tab(
@@ -673,7 +693,7 @@ process_pop_sex_tab(
   file_name = "p6c_hearing"
 )
 
-### Table 6d. Population 5 years old and over by Difficulty in Mobility and by Sex ----
+### Table P6d. Population 5 years old and over by Difficulty in Mobility and by Sex ----
 get_pop_map(pop$d3_mobility) %>% print()
 
 process_pop_sex_tab(
@@ -683,7 +703,7 @@ process_pop_sex_tab(
   file_name = "p6d_mobility"
 )
 
-### Table 6e. Population 5 years old and over by Difficulty in Remembering and by Sex ----
+### Table P6e. Population 5 years old and over by Difficulty in Remembering and by Sex ----
 get_pop_map(pop$d4_memory) %>% print()
 
 process_pop_sex_tab(
@@ -693,7 +713,7 @@ process_pop_sex_tab(
   file_name = "p6e_memory"
 )
 
-### Table 6f. Population 5 years old and over by Difficulty in Selfcare and by Sex ----
+### Table P6f. Population 5 years old and over by Difficulty in Selfcare and by Sex ----
 get_pop_map(pop$d5_sefcare) %>% print()
 
 process_pop_sex_tab(
@@ -703,7 +723,7 @@ process_pop_sex_tab(
   file_name = "p6f_sefcare"
 )
 
-### Table 6g. Population 5 years old and over by Difficulty in Communication and by Sex ----
+### Table P6g. Population 5 years old and over by Difficulty in Communication and by Sex ----
 get_pop_map(pop$d6_communication) %>% print()
 
 process_pop_sex_tab(
@@ -713,11 +733,9 @@ process_pop_sex_tab(
   file_name = "p6g_communication"
 )
 
-### Table 7. Population by Urban/Rural by 5–year age group by internet access ---- 
-pop10 <- pop %>% 
-  filter(r3_age > 9)
 
-### Table 7. Population by Urban/Rural by 5–year age group by internet access ---- 
+
+### Table P7. Population by internet access and by Sex---- 
 pop10 <- pop %>% 
   filter(r3_age > 9)
 
@@ -730,7 +748,7 @@ process_pop_sex_tab(
   file_name = "p7_internet"
 )
 
-### Table 7a. Population by place of internet access ---- 
+### Table P7a. Population by place of internet access and by Sex ---- 
 
 get_pop_map(pop$h2_location) %>% print()
 
@@ -741,7 +759,7 @@ process_pop_sex_tab(
   file_name = "p7a_int_place"
 )
 
-### Table 8. Population by own mobile phone ---- 
+### Table P8. Population by own mobile phone and by Sex ---- 
 
 get_pop_map(pop$h3_mobile_phone) %>% print()
 
@@ -752,7 +770,7 @@ process_pop_sex_tab(
   file_name = "p8_mobile_phone"
 )
 
-### Table 9. Population by main activity ---- 
+### Table P9. Population by main activity and by Sex  ---- 
 
 get_pop_map(pop$lf1) %>% print()
 
@@ -763,7 +781,7 @@ process_pop_sex_tab(
   file_name = "p9_main_act"
 )
 
-### Table 10. Population by main activity ---- 
+### Table P10. Population by Labour Force Status and by Sex  ---- 
 
 get_pop_map(pop$ilo_lfs) %>% print()
 
@@ -774,7 +792,7 @@ process_pop_sex_tab(
   file_name = "p10_lfstatus"
 )
 
-### Table 11. Population by Degree of Labour market attachment by Atol ---- 
+### Table P11. Population by Degree of Labour market attachment and by Sex ---- 
 
 get_pop_map(pop$ilo_olf_dlma) %>% print()
 
@@ -785,7 +803,7 @@ process_pop_sex_tab(
   file_name = "p11_olf_dlma"
 )
 
-### Table 12. Population by Status in employment (ICSE 93) – Main job by Atol ---- 
+### Table P12. Population by Status in employment (ICSE 93) and by Sex  ---- 
 
 get_pop_map(pop$ilo_job1_ste_icse93) %>% print()
 
@@ -795,3 +813,242 @@ process_pop_sex_tab(
   var_name = "ilo_job1_ste_icse93", 
   file_name = "p12_ilo_job1_ste"
 )
+
+# 4. SOME HELP CREATING INDICATORS ON METADATA ---------------------------------
+## 4.1 Automating the  Household indicators generation ----
+
+#Setup paths
+table_folder <- tab
+files <- list.files(path = table_folder, pattern = "\\.xlsx$", full.names = FALSE)
+
+# Filter the list: Keep only files that DO NOT start with "p" (or "P")
+# The "^" symbol means "starts with"
+files_hh <- files[!grepl("^p", files, ignore.case = TRUE)]
+
+# Loop through files to build the metadata matrix
+popgis_metadata_hh <- map_df(files_hh, function(f) {
+  
+  file_path <- file.path(table_folder, f)
+  headers <- names(read_excel(file_path, n_max = 0))
+  dataset_name <- str_remove(f, "\\.xlsx$")
+  
+  # Configuration
+  ignore_cols <- c("aid") 
+  denominator <- "total_hh" 
+  
+  # Include total_hh in the indicators list for the RAW rows
+  indicators <- headers[!headers %in% ignore_cols]
+  
+  # Build the Base "RAW" (R) rows
+  raw_rows <- tibble(
+    id_indicateur        = indicators,
+    id_dataset           = dataset_name,
+    id_themes            = dataset_name, 
+    theme_nomenc_filter  = NA_character_,
+    ordre                = NA_integer_,
+    typind               = "R",          
+    topo                 = "PG",         
+    formule              = NA_character_, 
+    classeslib           = NA_character_,
+    id_symb              = NA_character_,
+    lib_indicateur       = paste("Number of", str_to_title(str_replace_all(indicators, "_", " "))),       
+    lib_indicateur_court = indicators, 
+    unite                = "hh",         
+    source               = "EPPSO-2021PHC",      
+    ss_indicat           = NA_character_,
+    ss_seuil             = NA_character_,
+    formule_lcl          = NA_character_,
+    formule_ucl          = NA_character_,
+    desc_indicateur      = NA_character_,
+    precisions           = NA_character_,
+    url_data             = NA_character_,
+    urllib_data          = NA_character_,
+    url_indicateur       = NA_character_,
+    urllib_indicateur    = NA_character_,
+    formula_indicat      = NA_character_,
+    url_logo             = NA_character_,
+    limutil_in           = NA_character_,
+    nbdec                = 0,            
+    published            = 1,            
+    essential            = 0,
+    highisbad            = 0,
+    diff_level           = 0,
+    indic_ass            = NA_character_,
+    id_view              = "map2",  
+    id_colfam            = "GC_Blue",      
+    classes              = NA_character_,  
+    shape                = "sp",         
+    rdmax                = NA_character_,
+    falpha               = 70,           
+    method               = NA_character_,
+    drawsymb             = 0,
+    show_arr             = 1,
+    curve_lev            = "INTERM",
+    diverging            = NA_character_,
+    tjs_fwk              = NA_character_,
+    default_view         = 0,
+    opened               = 1,
+    output               = "A",
+    
+    sort_key             = seq_along(indicators) * 2 - 1 
+  )
+  
+  # Build the "CALCULATED" (C) rows based on the Raw rows
+  calc_rows <- raw_rows %>%
+    filter(id_indicateur != denominator) %>% # REMOVE total_hh from percentage calculations
+    mutate(
+      # Build formulas and labels FIRST using the existing id_indicateur column
+      formule              = paste0(id_indicateur, "/", denominator, "*100"),
+      lib_indicateur_court = paste0(id_indicateur, " (%)"),
+      lib_indicateur       = paste("Proportion of", str_to_title(str_replace_all(id_indicateur, "_", " "))),
+      
+      # Now append _pct to the ID
+      id_indicateur        = paste0(id_indicateur, "_pct"),
+      
+      # Apply other overrides
+      typind               = "C",
+      unite                = "%",
+      nbdec                = 2,              
+      shape                = NA_character_,  
+      falpha               = NA_real_,       
+      id_colfam            = "GC_YelReds",   
+      classes              = "5",            
+      sort_key             = sort_key + 1
+    )
+  
+  # Combine and sort
+  bind_rows(raw_rows, calc_rows)
+}) %>%
+  arrange(id_dataset, sort_key) %>% 
+  mutate(ordre = row_number()) %>%   # Adds the sequential order 1, 2, 3...
+  select(-sort_key)
+
+view(popgis_metadata_hh)
+
+# Export to Excel
+write_xlsx(popgis_metadata_hh, paste0(dd,"metadata/Metadata_Template_hh.xlsx"))
+
+
+## 4.2 Automating Population indicators -----
+
+# 1. Isolate datasets starting with "p" (or "P")
+files_p <- files[grepl("^p", files, ignore.case = TRUE)]
+
+
+# 2. Loop through the POPULATION files
+popgis_metadata_pop <- map_df(files_p, function(f) {
+  
+  file_path <- file.path(tab, f)
+  headers <- names(read_excel(file_path, n_max = 0))
+  dataset_name <- str_remove(f, "\\.xlsx$")
+  
+  # Configuration
+  ignore_cols <- c("aid") 
+  
+  # Set your actual total columns here
+  total_t <- "t_pop"  # Denominator for t_ indicators (total population)
+  total_m <- "m_pop"  # Denominator for m_ indicators (male population)
+  total_f <- "f_pop"  # Denominator for f_ indicators (female population)
+  
+  # Combine them into a list so we can exclude them from percentage calculations
+  denominators <- c(total_t, total_m, total_f)
+  
+  # Base indicators
+  indicators <- headers[!headers %in% ignore_cols]
+  
+  # 3. Build the Base "RAW" (R) rows
+  raw_rows <- tibble(
+    id_indicateur        = indicators,
+    id_dataset           = dataset_name,
+    id_themes            = dataset_name, 
+    theme_nomenc_filter  = NA_character_,
+    ordre                = NA_integer_,
+    typind               = "R",          
+    topo                 = "PG",         
+    formule              = NA_character_, 
+    classeslib           = NA_character_,
+    id_symb              = NA_character_,
+    lib_indicateur       = paste("Number of", str_to_title(str_replace_all(indicators, "_", " "))),       
+    lib_indicateur_court = indicators, 
+    unite                = "pers",       # Set to 'pers' for population counts
+    source               = "EPPSO-2021PHC",      
+    ss_indicat           = NA_character_,
+    ss_seuil             = NA_character_,
+    formule_lcl          = NA_character_,
+    formule_ucl          = NA_character_,
+    desc_indicateur      = NA_character_,
+    precisions           = NA_character_,
+    url_data             = NA_character_,
+    urllib_data          = NA_character_,
+    url_indicateur       = NA_character_,
+    urllib_indicateur    = NA_character_,
+    formula_indicat      = NA_character_,
+    url_logo             = NA_character_,
+    limutil_in           = NA_character_,
+    nbdec                = 0,            
+    published            = 1,            
+    essential            = 0,
+    highisbad            = 0,
+    diff_level           = 0,
+    indic_ass            = NA_character_,
+    id_view              = "map2",  
+    id_colfam            = "GC_Blue",      
+    classes              = NA_character_,  
+    shape                = "sp",         
+    rdmax                = NA_character_,
+    falpha               = 70,           
+    method               = NA_character_,
+    drawsymb             = 0,
+    show_arr             = 1,
+    curve_lev            = "INTERM",
+    diverging            = NA_character_,
+    tjs_fwk              = NA_character_,
+    default_view         = 0,
+    opened               = 1,
+    output               = "A",
+    
+    sort_key             = seq_along(indicators) * 2 - 1 
+  )
+  
+  # 4. Build the "CALCULATED" (C) rows based on the Raw rows
+  calc_rows <- raw_rows %>%
+    filter(!id_indicateur %in% denominators) %>% # REMOVE all total columns from percentage calculations
+    mutate(
+      # Dynamically assign the correct denominator based on prefix
+      target_denom = case_when(
+        str_starts(id_indicateur, "t_") ~ total_t,
+        str_starts(id_indicateur, "m_") ~ total_m,
+        str_starts(id_indicateur, "f_") ~ total_f,
+        TRUE ~ total_t # Fallback to total pop if no prefix matches
+      ),
+      
+      # Build formulas using the dynamic denominator
+      formule              = paste0(id_indicateur, "/", target_denom, "*100"),
+      lib_indicateur_court = paste0(id_indicateur, " (%)"),
+      lib_indicateur       = paste("Proportion of", str_to_title(str_replace_all(id_indicateur, "_", " "))),
+      
+      # Now append _pct to the ID
+      id_indicateur        = paste0(id_indicateur, "_pct"),
+      
+      # Apply other overrides
+      typind               = "C",
+      unite                = "%",
+      nbdec                = 2,              
+      shape                = NA_character_,  
+      falpha               = NA_real_,       
+      id_colfam            = "GC_YelReds",   
+      classes              = "5",            
+      sort_key             = sort_key + 1
+    ) %>%
+    select(-target_denom) # Drop the temporary target_denom column
+  
+  # 5. Combine and sort
+  bind_rows(raw_rows, calc_rows)
+}) %>%
+  arrange(id_dataset, sort_key) %>% 
+  mutate(ordre = row_number()) %>%   
+  select(-sort_key)
+
+view(popgis_metadata_pop)
+# Export to Excel
+write_xlsx(popgis_metadata_pop, paste0(dd,"metadata/Metadata_Template_pop.xlsx"))
