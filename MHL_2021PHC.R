@@ -62,6 +62,11 @@ var_labels <- data.frame(
   Description = var_label(hous) %>% as.character()
 )
 
+pop_var_labels <- data.frame(
+  Variable = names(pop),
+  Description = var_label(pop) %>% as.character()
+)
+
 # 2. HOUSING DATASET ==========================================================
 ## 2.1 Filter questionnaires we're keeping for the tabulation process ----
 # Keep private and occuppied hhs
