@@ -681,93 +681,315 @@ process_multiselect_popgis(hh, codgeo, "fish_type", var_map, "h41_fish_type")
 
 
 
-### Table H3. Floor type by Hamlet ---------------------------------------------
-print_labels(hh$i3_floor)
-cat_map <- get_gis_map(hh$i3_floor)
-cat_map
 
-process_popgis_tab(hh, codgeo, "i3_floor", cat_map, "i3_floor" )
+# 3. PERSON DATASET =============================================================
 
-### Table H4. Roof type by Hamlet ---------------------------------------------
-print_labels(hh$i4_roof)
-cat_map <- get_gis_map(hh$i4_roof)
-cat_map
+## 3.1 Prepare dataset ------ 
+# Keep Private households
+# Keep private and occuppied hhs
+pop <- pop %>% 
+  rename(hid = 	hamlet) %>% 
+  filter(dwell_type %in% c(1,2)) %>% # dwell_type !=NA implies occupied
+  mutate(hid = zap_labels(hid))
 
-process_popgis_tab(hh, codgeo, "i4_roof", cat_map, "i4_roof" )
+## 2.2 Create Codgeo table master EA list ----
+# We will sort EA code out later when we get the originals
+# We extract it from the Hamlet layer that we will connecting later on in PopGIS
+ham_geo <- vect("C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/GEO Layers/PLW/PLW_2025PHC_HID_4326.shp")
+# Extract the data frame from the SpatVector first, then build the backbone
+codgeo <- as.data.frame(ham_geo) %>%
+  as_tibble() %>% 
+  select(hid_2025) %>% 
+  rename(hid = hid_2025) %>% 
+  mutate(hid = as.numeric(hid)) %>%
+  arrange(hid) |> 
+  # Fulfilling your note: Include the total pop
+  left_join(
+    pop %>%
+      group_by(hid) %>%
+      summarise(t_pop = n(),
+                m_pop = sum(sex == 1, na.rm = TRUE),   
+                f_pop = sum(sex == 2, na.rm = TRUE),
+                .groups = "drop"),
+    by = "hid"
+  ) %>%
+  # Ensure any empty hamlets show 0 households instead of NA
+  mutate(across(c(t_pop, m_pop, f_pop), ~replace_na(., 0)))
 
-### Table H5. Walls type by Hamlet ---------------------------------------------
-print_labels(hh$i5_material_walls)
-cat_map <- get_gis_map(hh$i5_material_walls)
-cat_map
+message("backbone layer contains ", nrow(codgeo), " hamlets")
 
-process_popgis_tab(hh, codgeo, "i5_material_walls", cat_map, "i5_material_walls" )
+sum(codgeo$totpop)
 
 
-### Table H6. Main Source of Drinking water by EA ---------------------------------------------
-var_map <- get_multiselect_map(hh, "i6_drink_water") %>% print()
-var_map["1"] <- "pub_pip_in"  
-var_map["2"] <- "pub_pip_ot"  
-print(var_map)
 
-process_multiselect_popgis(hh, codgeo, "i6_drink_water", var_map, "i6_drink_water")
+variables <- names(pop)
+labels_list <- list()
 
-### Table H6a. Improved Sources of Drinking water by Hamlet ------------------
-print_labels(hh$waterimpr)
-cat_map <- get_gis_map(hh$waterimpr)
-cat_map
+for (variable in variables) {
+  if (variable %in% names(pop)) {
+    labels_list[[variable]] <- get_catlab(pop[[variable]])
+  } else {
+    warning(paste("Variable", variable, "not found in the dataset."))
+  }
+}
 
-process_popgis_tab(hh, codgeo, "waterimpr", cat_map, "i6a_waterimpr" )
+# Print the labels
+for (variable in names(labels_list)) {
+  if (!is.null(labels_list[[variable]])) {
+    cat("Labels for variable", variable, ":\n")
+    print(labels_list[[variable]])
+    cat("\n")
+  } else {
+    cat("No labels found for variable", variable, "\n\n")
+  }
+}
+labels_list
 
-### Table H7. Main Source of cooking water by Hamlet ---------------------------------------------
-var_map <- get_multiselect_map(hh, "i7_source_water") %>% print()
-var_map["1"] <- "pub_pip_in"  
-var_map["2"] <- "pub_pip_ot"  
-var_map["7"] <- "own_tnk_in"
-var_map["8"] <- "own_tnk_ot"
-print(var_map)
+## 3.2 Define functions -------
 
-process_multiselect_popgis(hh, codgeo, "i7_source_water", var_map, "i7_source_water")
+get_pop_map <- function(vec, var_name = "unknown") {
+  # 1. Extract labels from Stata/Server metadata
+  labs <- attr(vec, "labels")
+  if (is.null(labs)) {
+    warning(paste("No labels found for", var_name))
+    return(NULL)
+  }
+  
+  codes <- as.character(labs)
+  raw_names <- names(labs)
+  
+  # 2. Clean the names with the split-and-truncate logic
+  clean_names <- map_chr(raw_names, function(x) {
+    # Split by : or ; and take the last part (the category)
+    clean <- str_split(x, "[:;]")[[1]] %>% last() %>% str_trim()
+    
+    clean %>%
+      str_to_lower() %>%
+      str_replace_all("[^a-z0-9 ]", "") %>%
+      str_replace_all("\\s+", "_") %>%
+      str_sub(1, 8) %>%        # Max 8 chars to allow for "t_", "m_", "f_"
+      str_replace("_$", "")
+  })
+  
+  # 3. Handle Duplicates
+  if (any(duplicated(clean_names))) {
+    message(paste("! Collision in", var_name, "- resolving duplicates..."))
+    clean_names <- make.unique(clean_names, sep = "_") %>% str_sub(1, 10)
+  }
+  
+  return(setNames(clean_names, codes))
+}
 
-### Table H7a. Cooking Water On Premises by Hamlet ------------------
-print_labels(hh$waterprem)
-cat_map <- get_gis_map(hh$waterprem)
-cat_map
+process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
+  
+  # 1. Generate the base GIS map
+  base_map <- get_pop_map(data[[var_name]], var_name)
+  if (is.null(base_map)) stop(paste("Metadata missing for:", var_name))
+  
+  # 2. Prepare long data
+  tab_long <- data %>%
+    filter(!is.na(!!sym(var_name)), !is.na(sex)) %>%
+    mutate(sex_prefix = case_when(sex == 1 ~ "m", sex == 2 ~ "f"))
+  
+  # 3. Aggregation
+  counts_all <- bind_rows(
+    tab_long %>% count(hid, sex_prefix, !!sym(var_name)) %>% rename(prefix = sex_prefix),
+    tab_long %>% count(hid, !!sym(var_name)) %>% mutate(prefix = "t")
+  ) %>%
+    mutate(col_key = paste0(prefix, "_", !!sym(var_name)))
+  
+  # 4. Pivot Wide
+  p_table <- counts_all %>%
+    select(hid, col_key, n) %>%
+    pivot_wider(names_from = col_key, values_from = n, values_fill = 0)
+  
+  # 5. CREATE AND APPLY MAP IMMEDIATELY
+  # This ensures p_table has the real names (t_kiribati, etc.) before we proceed
+  final_rename_map <- c(
+    setNames(paste0("t_", base_map), paste0("t_", names(base_map))),
+    setNames(paste0("m_", base_map), paste0("m_", names(base_map))),
+    setNames(paste0("f_", base_map), paste0("f_", names(base_map)))
+  )
+  
+  # Apply renaming here
+  p_table <- p_table %>%
+    rename_with(~final_rename_map[.], .cols = any_of(names(final_rename_map)))
+  
+  # 6. Final Assembly with Backbone
+  final_df <- backbone %>%
+    left_join(p_table, by = "hid") %>%
+    mutate(across(everything(), ~replace_na(., 0))) %>%
+    # Calculate Totals using the NEW names
+    mutate(
+      t_pop = rowSums(select(., starts_with("t_")), na.rm = TRUE),
+      m_pop = rowSums(select(., starts_with("m_")), na.rm = TRUE),
+      f_pop = rowSums(select(., starts_with("f_")), na.rm = TRUE)
+    ) %>%
+    relocate(t_pop, m_pop, f_pop, .after = hid)
+  
+  # --- VERIFICATION BLOCK (Using assigned names) ---
+  # This sums every numeric column in the final table
+  cat("\n==========================================\n")
+  cat("VERIFICATION TOTALS FOR:", file_name, "\n")
+  cat("==========================================\n")
+  
+  check_totals <- final_df %>%
+    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    pivot_longer(everything(), names_to = "Indicator", values_to = "National_Total")
+  
+  print(as.data.frame(check_totals))
+  cat("==========================================\n\n")
+  
+  # 7. Export
+  write.xlsx(final_df, 
+             file = paste0(tab, file_name, ".xlsx"), 
+             sheetName = "hid", 
+             rowNames = FALSE, 
+             overwrite = TRUE)
+}
 
-process_popgis_tab(hh, codgeo, "waterprem", cat_map, "i7a_waterprem" )
 
-### Table H8. Toilet Facilities by Hamlet ------------------
-print_labels(hh$i8_toilet_facility)
-cat_map <- get_gis_map(hh$i8_toilet_facility)
-cat_map
-cat_map["1"] <- "flush_sew"  
-cat_map["2"] <- "flush_sept"
-cat_map["5"] <- "pl_slab"  
-cat_map["6"] <- "pl_open"  
-print(cat_map)
-process_popgis_tab(hh, codgeo, "i8_toilet_facility", cat_map, "i8_toilet_facility" )
+## 3.3 POPPULATION TABLES ------------------------------------------------------
+### Table P1. Population by 5–year age group by sex ----
+get_pop_map(pop$age_grp5) %>% print()
+print_labels(pop$age_grp5)
 
-### Table H8a. Improved Sanitation by Hamlet ------------------
-print_labels(hh$sanitationimpr)
-cat_map <- get_gis_map(hh$sanitationimpr)
-cat_map
-process_popgis_tab(hh, codgeo, "sanitationimpr", cat_map, "i8a_sanitationimpr" )
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "age_grp5", 
+  file_name = "p1_age_5yrbands"
+)
 
-### Table H8b. Shared Toilet by Hamlet ------------------
-print_labels(hh$i8b_share_toilet)
-cat_map <- get_gis_map(hh$i8b_share_toilet)
-cat_map["1"] <- "shared"  
-cat_map["2"] <- "not_shared"
-cat_map
+### Table P2. Population by Ethnic Group and by Sex ----
 
-process_popgis_tab(hh, codgeo, "i8b_share_toilet", cat_map, "i8b_share_toilet" )
+get_pop_map(pop$ethnicity) %>% print()
 
-### Table H9. Main cooking fuel by Hamlet ---------------------------------------------
-var_map <- get_multiselect_map(hh, "i9_cook_fuel") %>% print()
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "ethnicity", 
+  file_name = "p2_ethnicity"
+)
 
-process_multiselect_popgis(hh, codgeo, "i9_cook_fuel", var_map, "i9_cook_fuel")
+### Table P3. Population by citizenship and by Sex ----- 
 
-### Table H10. Main source of electricity by Hamlet ---------------------------------------------
-var_map <- get_multiselect_map(hh, "i10_electricity") %>% print()
-var_map["0"] <- "no_elect"
+cat_map <- get_pop_map(pop$citizenship) %>% print()
 
-process_multiselect_popgis(hh, codgeo, "i10_electricity", var_map, "i10_electricity")
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "citizenship", 
+  file_name = "p3_citizen"
+)
+
+### Table P4. Population by relationship with head of the household and by Sex -----  
+cat_map <- get_pop_map(pop$relat) %>% print()
+
+process_pop_sex_tab(
+  data = pop, 
+  backbone = codgeo, 
+  var_name = "relat", 
+  file_name = "p4_relat"
+)
+
+
+
+### Table P5. Population 15 years and Over by Sex and Marital Status ----
+# define population 15+
+pop15 <- pop %>% 
+  filter(age > 14)
+
+get_pop_map(pop15$mstatus) %>% print()
+
+process_pop_sex_tab(
+  data = pop15, 
+  backbone = codgeo, 
+  var_name = "mstatus", 
+  file_name = "p4_marital_status"
+)
+
+
+### Table P6a. Population by Individual classified as disabled (WG statistic, Min. 1/6 of Q ==3 or 4) ----
+pop5 <- pop %>%
+  filter(age > 4)
+
+# 
+# process_pop_sex_tab(
+#   data = pop5, 
+#   backbone = codgeo, 
+#   var_name = "wg_disabled", 
+#   file_name = "p6a_wg_disabled"
+# )
+
+### Table P6a. Population 5 years old and over by Difficulty in Seeing and by Sex ----
+get_pop_map(pop$seeing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "seeing", 
+  file_name = "p6a_seeing"
+)
+
+### Table P6b. Population 5 years old and over by Difficulty in Hearing and by Sex ----
+get_pop_map(pop$hearing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "hearing", 
+  file_name = "p6b_hearing"
+)
+
+### Table P6c. Population 5 years old and over by Difficulty in Mobility and by Sex ----
+get_pop_map(pop$walking) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "walking", 
+  file_name = "p6c_mobility"
+)
+
+### Table P6d. Population 5 years old and over by Difficulty in Remembering and by Sex ----
+get_pop_map(pop$remembering) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "remembering", 
+  file_name = "p6d_memory"
+)
+
+### Table P6e. Population 5 years old and over by Difficulty in Selfcare and by Sex ----
+get_pop_map(pop$selfcare) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "selfcare", 
+  file_name = "p6e_sefcare"
+)
+
+### Table P6f. Population 5 years old and over by Difficulty in Communication and by Sex ----
+get_pop_map(pop$communication) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "communication", 
+  file_name = "p6f_communication"
+)
+
+### Table P7a. Population 5 years old and over by Some Difficulty (cut-off) ----
+get_pop_map(pop$some_disab) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo, 
+  var_name = "some_disab", 
+  file_name = "p7a_some_disab"
+)
+
+
