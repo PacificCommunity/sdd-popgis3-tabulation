@@ -15,6 +15,9 @@ dd <- "C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/Data/Palau/2025/"
 tab <- "C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/Data/Palau/2025/tables/"
 nada <- "C:/Users/luisr/OneDrive - SPC/NADA/Palau/SPC_PLW_2025_PHC_v01_M/Data/Distribute/"
 
+# Initialize empty translation dictionary to add it into the metadata table later on
+master_labels <- tibble(db_name = character(), readable_name = character())
+
 # 1.IMPORT AND PREPARE CENSUS DATASETS ========================================
 ## 1.1 Import Stata databases ----
 
@@ -78,9 +81,9 @@ hous <- hous |>
 ## 2.1 Filter questionnaires we're keeping for the tabulation process ----
 # Keep private and occuppied hhs
 hh <- hous %>% 
-  rename(hid = 	hamlet) %>% 
+  rename(hid2025 = 	hamlet) %>% 
   filter(dwell_type %in% c(1,2)) %>% # dwell_type !=NA implies occupied
-  mutate(hid = zap_labels(hid))
+  mutate(hid2025 = zap_labels(hid2025))
 
 ## 2.2 Create Codgeo table master EA list ----
 # We will sort EA code out later when we get the originals
@@ -90,15 +93,15 @@ ham_geo <- vect("C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/GEO Layer
 codgeo <- as.data.frame(ham_geo) %>%
   as_tibble() %>% 
   select(hid_2025) %>% 
-  rename(hid = hid_2025) %>% 
-  mutate(hid = as.numeric(hid)) %>%
-  arrange(hid) |> 
+  rename(hid2025 = hid_2025) %>% 
+  mutate(hid2025 = as.numeric(hid2025)) %>%
+  arrange(hid2025) |> 
   # Fulfilling your note: Include the total HHs
   left_join(
     hh %>%
-      group_by(hid) %>%
+      group_by(hid2025) %>%
       summarise(total_hh = n(), .groups = "drop"),
-    by = "hid"
+    by = "hid2025"
   ) %>%
   # Ensure any empty hamlets show 0 households instead of NA
   mutate(total_hh = replace_na(total_hh, 0))
@@ -112,18 +115,18 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   # 1. Tabulate and Pivot
   tab_df <- data %>%
     filter(!is.na(!!sym(var_name))) %>%
-    count(hid, !!sym(var_name)) %>%
+    count(hid2025, !!sym(var_name)) %>%
     # Convert codes to character so they match the case_when keys
     mutate(!!sym(var_name) := as.character(zap_labels(!!sym(var_name)))) %>%
     pivot_wider(names_from = !!sym(var_name), values_from = n, values_fill = 0)
   
   # 2. Rename columns using your mapping
   tab_df <- tab_df %>%
-    rename_with(~recode(., !!!rename_map), .cols = -hid)
+    rename_with(~recode(., !!!rename_map), .cols = -hid2025)
   
   # 3. Join with Codgeo backbone (ensure 78 rows)
   final <- backbone %>%
-    full_join(tab_df, by = "hid") %>%
+    full_join(tab_df, by = "hid2025") %>%
     mutate(across(everything(), ~replace_na(., 0))) 
   
   # 4. Validation Checks
@@ -132,7 +135,7 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   
   # 5. Summary Totals for console
   totals <- final %>%
-    select(-hid) %>% 
+    select(-hid2025) %>% 
     summarise(across(everything(), sum))
   
   cat("\n--- SUMMARY TOTALS:", file_name, "---\n")
@@ -144,8 +147,9 @@ process_popgis_tab <- function(data, backbone, var_name, rename_map, file_name) 
   cat("======================================================\n\n")
   
   # 6. Export
-  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid")
+  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid2025")
 }
+
 
 ## 2.4 Automate categories map production --------
 get_gis_map <- function(vec, var_name = "unknown") {
@@ -159,41 +163,67 @@ get_gis_map <- function(vec, var_name = "unknown") {
   codes <- as.character(labs)
   raw_names <- names(labs)
   
-  # 2. Clean the names (lowercase, no specials, spaces to underscores)
+  # 2. Clean the names
   clean_names <- raw_names %>%
     str_to_lower() %>%
     str_replace_all("[^a-z0-9 ]", "") %>%
     str_trim() %>%
     str_replace_all("\\s+", "_") %>%
-    str_sub(1, 10) %>%        # Truncate to 10
-    str_replace("_$", "")     # Clean trailing underscore
+    str_replace("^([0-9])", "v\\1") %>% 
+    str_remove("^_")
+  
+  # --- NEW: Catch forbidden system words ---
+  forbidden_words <- c("yes", "no", "none", "unknown")
+  clean_names <- if_else(clean_names %in% forbidden_words, 
+                         paste0("v", clean_names), 
+                         clean_names)
+  # -----------------------------------------
+  
+  # Apply truncation
+  clean_names <- clean_names %>% 
+    str_sub(1, 10) %>%        
+    str_replace("_$", "")     
   
   # 3. Handle Duplicates (Collision Detection)
   if (any(duplicated(clean_names))) {
     message(paste("! Collision detected in", var_name, "- resolving duplicates..."))
     clean_names <- make.unique(clean_names, sep = "_")
-    # Ensure they are still <= 10 chars after adding suffixes
     clean_names <- str_sub(clean_names, 1, 10)
   }
   
+  # 4. Append to Master Dictionary
+  # Clean leading numbers, dots, and spaces for the readable label
+  clean_readable <- str_remove(raw_names, "^[0-9.]+\\s*")
+  clean_readable <- if_else(clean_readable == "", raw_names, clean_readable) # Safety catch
+  
+  new_entries <- tibble(db_name = clean_names, readable_name = clean_readable)
+  master_labels <<- bind_rows(master_labels, new_entries) %>% 
+    distinct(db_name, .keep_all = TRUE)
+  
   return(setNames(clean_names, codes))
 }
-
 ## 2.5 Multi Select variables function and map names. -------
-
+# 1. The Helper Function (cleans individual strings)
 clean_multiselect_label <- function(label) {
   # 1. Split by : or ; and take the last part
   clean_text <- str_split(label, "[:;]")[[1]] %>% last() %>% str_trim()
   
-  # 2. Clean for GIS (lowercase, alphanumeric, 10 chars)
-  clean_text %>%
+  # 2. Clean for GIS (lowercase, alphanumeric)
+  clean_text <- clean_text %>%
     str_to_lower() %>%
     str_replace_all("[^a-z0-9 ]", "") %>%
+    str_trim() %>%
     str_replace_all("\\s+", "_") %>%
+    str_replace("^([0-9])", "v\\1") %>%
+    str_remove("^_")
+  
+  # 3. Final truncation
+  clean_text %>%
     str_sub(1, 10) %>%
     str_replace("_$", "")
 }
 
+# 2. The Main Mapping Function (loops columns and applies dictionary)
 get_multiselect_map <- function(data, prefix) {
   # Find all columns belonging to this question
   cols <- names(data)[str_detect(names(data), paste0("^", prefix, "__"))]
@@ -206,23 +236,43 @@ get_multiselect_map <- function(data, prefix) {
   # Extract the labels for these specific columns
   raw_labels <- map_chr(cols, ~as.character(var_label(data[[.x]])))
   
-  # Clean the labels (removing prefix text before : or ;)
+  # Clean the labels using your helper function
   clean_names <- map_chr(raw_labels, clean_multiselect_label)
+  
+  # --- FOOLPROOF FORBIDDEN WORDS CHECK ---
+  forbidden_words <- c("yes", "no", "none", "unknown")
+  clean_names <- if_else(clean_names %in% forbidden_words, 
+                         paste0("v", clean_names), 
+                         clean_names)
+  # ---------------------------------------
   
   # Resolve collisions (duplicate 10-char names)
   if (any(duplicated(clean_names))) {
     clean_names <- make.unique(clean_names, sep = "_") %>% str_sub(1, 10)
   }
   
+  # --- APPEND TO MASTER DICTIONARY ---
+  clean_readable <- str_remove(raw_labels, "^[0-9.]+\\s*")
+  clean_readable <- if_else(clean_readable == "", raw_labels, clean_readable)
+  
+  new_entries <- tibble(db_name = clean_names, readable_name = clean_readable)
+  
+  if(exists("master_labels")) {
+    master_labels <<- bind_rows(master_labels, new_entries) %>% 
+      distinct(db_name, .keep_all = TRUE)
+  } else {
+    warning("master_labels dictionary not found in environment.")
+  }
+  # -----------------------------------
+  
   return(setNames(clean_names, codes))
 }
-
 # Multiselect options tabulation 
 process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_name) {
   
   # Aggregate by EA
   tab_df <- data %>%
-    group_by(hid) %>%
+    group_by(hid2025) %>%
     summarise(
       across(starts_with(paste0(prefix, "__")), ~sum(. == 1, na.rm = TRUE)),
       .groups = "drop"
@@ -238,16 +288,16 @@ process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_n
   
   # Final backbone join
   final <- backbone %>%
-    full_join(tab_df, by = "hid") %>%
+    full_join(tab_df, by = "hid2025") %>%
     mutate(across(everything(), ~replace_na(., 0))) %>%
-    relocate(total_hh, .after = hid)
+    relocate(total_hh, .after = hid2025)
   
   if (anyNA(final)) stop(paste("NAs detected in", file_name))
   if (nrow(final) != nrow(backbone)) warning(paste("Row count is", nrow(final), "for", file_name, "- expected", nrow(backbone)))
   
   # Summary Totals for console
   totals <- final %>%
-    select(-hid, -total_hh) %>% # Exclude IDs and baseline household totals from the sum
+    select(-hid2025, -total_hh) %>% # Exclude IDs and baseline household totals from the sum
     summarise(across(everything(), sum))
   
   cat("\n======================================================\n")
@@ -261,7 +311,7 @@ process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_n
   # ---------------------------------------------------------
   
   # Export
-  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid")
+  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid2025")
   cat("Table", file_name, "tabulated successfully.\n")
 }
 
@@ -269,9 +319,9 @@ process_multiselect_popgis <-function(data, backbone, prefix, rename_map, file_n
 
 process_numeric_popgis <- function(data, backbone, var_name, file_name) {
   
-  # 1. Aggregate numeric variable by EA (hid)
+  # 1. Aggregate numeric variable by EA (hid2025)
   tab_df <- data %>%
-    group_by(hid) %>%
+    group_by(hid2025) %>%
     summarise(
       sum_val = sum(!!sym(var_name), na.rm = TRUE),
       avg_val = mean(!!sym(var_name), na.rm = TRUE),
@@ -288,12 +338,12 @@ process_numeric_popgis <- function(data, backbone, var_name, file_name) {
   
   # 2. Final backbone join
   final <- backbone %>%
-    full_join(tab_df, by = "hid") %>%
+    full_join(tab_df, by = "hid2025") %>%
     # Replace NAs with 0 for hamlets with no records
     mutate(across(everything(), ~replace_na(., 0))) %>%
     # Round averages to 1 decimal place for cleaner GIS mapping
     mutate(across(starts_with("avg_"), ~round(., 1))) %>%
-    relocate(total_hh, .after = hid)
+    relocate(total_hh, .after = hid2025)
   
   # ---------------------------------------------------------
   # 3. Validation Checks
@@ -317,7 +367,7 @@ process_numeric_popgis <- function(data, backbone, var_name, file_name) {
   # ---------------------------------------------------------
   
   # 6. Export
-  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid")
+  write.xlsx(final, paste0(tab, file_name, ".xlsx"), sheetName = "hid2025")
   cat("Table", file_name, "tabulated successfully.\n")
 }
 
@@ -366,13 +416,6 @@ cat_map
 process_popgis_tab(hh, codgeo, "tenure_type", cat_map, "h5_tenure_type" )
 
 
-### Table H6. Type of housing tenure by Hamlet ---------------------------------------------
-print_labels(hh$tenure_type)
-cat_map <- get_gis_map(hh$tenure_type)
-cat_map
-
-process_popgis_tab(hh, codgeo, "tenure_type", cat_map, "h6_tenure_type" )
-
 
 ### Table H7. Type of walls by Hamlet ---------------------------------------------
 print_labels(hh$walls)
@@ -385,9 +428,6 @@ process_popgis_tab(hh, codgeo, "walls", cat_map, "h7_walls" )
 ### Table H7a. Insulated walls by Hamlet ---------------------------------------------
 print_labels(hh$insulated_walls)
 cat_map <- get_gis_map(hh$insulated_walls)
-cat_map <- c(    "1" = "yes",
-                    "2" = "no",
-                    "3" = "dunno")
 
 process_popgis_tab(hh, codgeo, "insulated_walls", cat_map, "h7a_ins_walls" )
 
@@ -402,8 +442,6 @@ process_popgis_tab(hh, codgeo, "roof", cat_map, "h8_roof" )
 ### Table H8a. Insulated roof by Hamlet ---------------------------------------------
 print_labels(hh$insulated_roof)
 cat_map <- get_gis_map(hh$insulated_roof)
-cat_map <- c(    "1" = "yes",
-                 "2" = "no")
 
 process_popgis_tab(hh, codgeo, "insulated_roof", cat_map, "h8a_ins_roof" )
 
@@ -429,11 +467,11 @@ hh <- hh %>%
 
 # 2. Define the GIS map with your <= 10 character limit
 cat_map_rooms <- c(
-  "1" = "1_room",
-  "2" = "2_rooms",
-  "3" = "3_to_4_rm",
-  "4" = "5_plus_rm",
-  "99" = "unknown"
+  "1" = "v1_room",
+  "2" = "v2_rooms",
+  "3" = "v3_to_4_rm",
+  "4" = "v5_plus_rm",
+  "99" = "vunknown"
 )
 
 # 3. Process the table using your standard function
@@ -454,25 +492,25 @@ hh <- hh %>%
 
 # 2. Define the GIS map with your <= 10 character limit
 cat_map_rooms <- c(
-  "1" = "1_room",
-  "2" = "2_rooms",
-  "3" = "3_to_4_rm",
-  "4" = "5_plus_rm",
-  "99" = "unknown"
+  "1" = "v1_room",
+  "2" = "v2_rooms",
+  "3" = "v3_to_4_rm",
+  "4" = "v5_plus_rm",
+  "99" = "vunknown"
 )
 
 # 3. Process the table using your standard function
 process_popgis_tab(hh, codgeo, "rooms_grouped", cat_map_rooms, "h11_bedrooms")
 
 
-### Table H12. Main Drinking Water by Hamlet ---------------------------------------------
+### Table H12. Main source of Drinking Water by Hamlet ---------------------------------------------
 print_labels(hh$drink_water)
 cat_map <- get_gis_map(hh$drink_water)
 
 
 process_popgis_tab(hh, codgeo, "drink_water", cat_map, "h12_drink_water" )
 
-### Table H13. Main Cook Water by Hamlet ---------------------------------------------
+### Table H13. Main source Cooking Water by Hamlet ---------------------------------------------
 print_labels(hh$cook_water)
 cat_map <- get_gis_map(hh$cook_water)
 
@@ -494,7 +532,7 @@ cat_map
 
 process_popgis_tab(hh, codgeo, "energy_type", cat_map, "h15_energy_type" )
 
-### Table H16. Bathub or shower in the household by Hamlet ---------------------------------------------
+### Table H16. Bathtub or shower in the household by Hamlet ---------------------------------------------
 print_labels(hh$bath_shower)
 cat_map <- get_gis_map(hh$bath_shower)
 cat_map
@@ -578,7 +616,7 @@ cat_map
 
 process_popgis_tab(hh, codgeo, "aircon", cat_map, "h26_aircon" ) 
 
-### Table H27. Household transport items by Hamlet ---------------------------------------------
+### Table H27. Household transport means by Hamlet ---------------------------------------------
 var_map <- get_multiselect_map(hh, "transport") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "transport", var_map, "h27_transport")
@@ -598,7 +636,7 @@ cat_map
 
 process_popgis_tab(hh, codgeo, "agriculture", cat_map, "h29_agriculture" ) 
 
-### Table H30. Type if crop and land by Hamlet ---------------------------------------------
+### Table H30. Type of crop and land by Hamlet ---------------------------------------------
 var_map <- get_multiselect_map(hh, "land_crop") %>% print()
 var_map[2] <- "crop_othpl"
 
@@ -636,7 +674,7 @@ cat_map
 
 process_popgis_tab(hh, codgeo, "agr_purpose", cat_map, "h35_agr_purpose" ) 
 
-### Table H36. Household Forst or wooded land by Hamlet ---------------------------------------------
+### Table H36. Household Forest or wooded land by Hamlet ---------------------------------------------
 print_labels(hh$forest)
 cat_map <- get_gis_map(hh$forest)
 cat_map
@@ -669,12 +707,12 @@ var_map <- get_multiselect_map(hh, "fish_method") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "fish_method", var_map, "h39_fish_method")
 
-### Table H40. Type of fishing mlocation by Hamlet ---------------------------------------------
+### Table H40. Type of fishing location by Hamlet ---------------------------------------------
 var_map <- get_multiselect_map(hh, "fish_location") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "fish_location", var_map, "h40_fish_location")
 
-### Table H41. Type of fish  by Hamlet ---------------------------------------------
+### Table H41. Type of fish by Hamlet ---------------------------------------------
 var_map <- get_multiselect_map(hh, "fish_type") %>% print()
 
 process_multiselect_popgis(hh, codgeo, "fish_type", var_map, "h41_fish_type")
@@ -688,64 +726,40 @@ process_multiselect_popgis(hh, codgeo, "fish_type", var_map, "h41_fish_type")
 # Keep Private households
 # Keep private and occuppied hhs
 pop <- pop %>% 
-  rename(hid = 	hamlet) %>% 
+  rename(hid2025 = hamlet) |> 
   filter(dwell_type %in% c(1,2)) %>% # dwell_type !=NA implies occupied
-  mutate(hid = zap_labels(hid))
+  mutate(hid2025 = zap_labels(hid2025))
 
-## 2.2 Create Codgeo table master EA list ----
-# We will sort EA code out later when we get the originals
-# We extract it from the Hamlet layer that we will connecting later on in PopGIS
+## 3.2 Create Codgeo table master EA list ----
+
 ham_geo <- vect("C:/Users/luisr/SPC/SDD GIS - Documents/PopGIS/PopGIS3/GEO Layers/PLW/PLW_2025PHC_HID_4326.shp")
-# Extract the data frame from the SpatVector first, then build the backbone
-codgeo <- as.data.frame(ham_geo) %>%
+
+codgeo_pop <- as.data.frame(ham_geo) %>%
   as_tibble() %>% 
   select(hid_2025) %>% 
-  rename(hid = hid_2025) %>% 
-  mutate(hid = as.numeric(hid)) %>%
-  arrange(hid) |> 
-  # Fulfilling your note: Include the total pop
+  rename(hid2025 = hid_2025) %>% 
+  mutate(hid2025 = as.numeric(hid2025)) %>%
+  arrange(hid2025) %>% 
+  # Fulfilling your note: Include the total pop and demographics
   left_join(
     pop %>%
-      group_by(hid) %>%
-      summarise(t_pop = n(),
-                m_pop = sum(sex == 1, na.rm = TRUE),   
-                f_pop = sum(sex == 2, na.rm = TRUE),
-                .groups = "drop"),
-    by = "hid"
+      group_by(hid2025) %>%
+      summarise(
+        t_pop = n(),
+        m_pop = sum(sex == 1, na.rm = TRUE),   
+        f_pop = sum(sex == 2, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "hid2025"
   ) %>%
-  # Ensure any empty hamlets show 0 households instead of NA
   mutate(across(c(t_pop, m_pop, f_pop), ~replace_na(., 0)))
 
-message("backbone layer contains ", nrow(codgeo), " hamlets")
+message("Population backbone layer contains ", nrow(codgeo_pop), " hamlets")
+# Fixed your test check syntax here:
+sum(codgeo_pop$t_pop) 
 
-sum(codgeo$totpop)
 
-
-
-variables <- names(pop)
-labels_list <- list()
-
-for (variable in variables) {
-  if (variable %in% names(pop)) {
-    labels_list[[variable]] <- get_catlab(pop[[variable]])
-  } else {
-    warning(paste("Variable", variable, "not found in the dataset."))
-  }
-}
-
-# Print the labels
-for (variable in names(labels_list)) {
-  if (!is.null(labels_list[[variable]])) {
-    cat("Labels for variable", variable, ":\n")
-    print(labels_list[[variable]])
-    cat("\n")
-  } else {
-    cat("No labels found for variable", variable, "\n\n")
-  }
-}
-labels_list
-
-## 3.2 Define functions -------
+## 3.3 Define mapping function -------
 
 get_pop_map <- function(vec, var_name = "unknown") {
   # 1. Extract labels from Stata/Server metadata
@@ -760,25 +774,58 @@ get_pop_map <- function(vec, var_name = "unknown") {
   
   # 2. Clean the names with the split-and-truncate logic
   clean_names <- map_chr(raw_names, function(x) {
-    # Split by : or ; and take the last part (the category)
     clean <- str_split(x, "[:;]")[[1]] %>% last() %>% str_trim()
     
-    clean %>%
+    clean <- clean %>%
       str_to_lower() %>%
       str_replace_all("[^a-z0-9 ]", "") %>%
+      str_trim() %>%
       str_replace_all("\\s+", "_") %>%
+      str_replace("^([0-9])", "v\\1") %>%
+      str_remove("^_")
+    
+    # --- Catch forbidden system words ---
+    forbidden_words <- c("yes", "no", "none", "unknown")
+    if (clean %in% forbidden_words) {
+      clean <- paste0("v_", clean)
+    }
+    
+    clean %>%
       str_sub(1, 8) %>%        # Max 8 chars to allow for "t_", "m_", "f_"
       str_replace("_$", "")
   })
   
-  # 3. Handle Duplicates
+  # 3. Handle Duplicates (THE FIX)
   if (any(duplicated(clean_names))) {
     message(paste("! Collision in", var_name, "- resolving duplicates..."))
-    clean_names <- make.unique(clean_names, sep = "_") %>% str_sub(1, 10)
+    # Truncate to 6 characters FIRST so that make.unique has room to append "_1" 
+    # without exceeding the 8-character limit.
+    clean_names <- str_sub(clean_names, 1, 6) %>% str_replace("_$", "")
+    clean_names <- make.unique(clean_names, sep = "_")
   }
+  
+  # 4. --- APPEND TO MASTER DICTIONARY ---
+  # 4. --- APPEND TO MASTER DICTIONARY ---
+  clean_readable <- str_remove(raw_names, "^[0-9.]+\\s*")
+  clean_readable <- if_else(clean_readable == "", raw_names, clean_readable)
+  
+  if(exists("master_labels")) {
+    new_entries <- bind_rows(
+      tibble(db_name = paste0("t_", clean_names), readable_name = paste("Total", clean_readable)),
+      tibble(db_name = paste0("m_", clean_names), readable_name = paste("Male", clean_readable)),
+      tibble(db_name = paste0("f_", clean_names), readable_name = paste("Female", clean_readable))
+    )
+    master_labels <<- bind_rows(master_labels, new_entries) %>% 
+      distinct(db_name, .keep_all = TRUE)
+  } else {
+    warning("master_labels dictionary not found in environment.")
+  }
+  # -----------------------------------
   
   return(setNames(clean_names, codes))
 }
+
+## 3.4 Define Tabulation Function -------
 
 process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
   
@@ -793,18 +840,17 @@ process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
   
   # 3. Aggregation
   counts_all <- bind_rows(
-    tab_long %>% count(hid, sex_prefix, !!sym(var_name)) %>% rename(prefix = sex_prefix),
-    tab_long %>% count(hid, !!sym(var_name)) %>% mutate(prefix = "t")
+    tab_long %>% count(hid2025, sex_prefix, !!sym(var_name)) %>% rename(prefix = sex_prefix),
+    tab_long %>% count(hid2025, !!sym(var_name)) %>% mutate(prefix = "t")
   ) %>%
     mutate(col_key = paste0(prefix, "_", !!sym(var_name)))
   
   # 4. Pivot Wide
   p_table <- counts_all %>%
-    select(hid, col_key, n) %>%
+    select(hid2025, col_key, n) %>%
     pivot_wider(names_from = col_key, values_from = n, values_fill = 0)
   
   # 5. CREATE AND APPLY MAP IMMEDIATELY
-  # This ensures p_table has the real names (t_kiribati, etc.) before we proceed
   final_rename_map <- c(
     setNames(paste0("t_", base_map), paste0("t_", names(base_map))),
     setNames(paste0("m_", base_map), paste0("m_", names(base_map))),
@@ -817,38 +863,32 @@ process_pop_sex_tab <- function(data, backbone, var_name, file_name) {
   
   # 6. Final Assembly with Backbone
   final_df <- backbone %>%
-    left_join(p_table, by = "hid") %>%
+    left_join(p_table, by = "hid2025") %>%
     mutate(across(everything(), ~replace_na(., 0))) %>%
-    # Calculate Totals using the NEW names
-    mutate(
-      t_pop = rowSums(select(., starts_with("t_")), na.rm = TRUE),
-      m_pop = rowSums(select(., starts_with("m_")), na.rm = TRUE),
-      f_pop = rowSums(select(., starts_with("f_")), na.rm = TRUE)
-    ) %>%
-    relocate(t_pop, m_pop, f_pop, .after = hid)
+    relocate(t_pop, m_pop, f_pop, .after = hid2025)
   
-  # --- VERIFICATION BLOCK (Using assigned names) ---
-  # This sums every numeric column in the final table
+  # --- VERIFICATION BLOCK ---
   cat("\n==========================================\n")
   cat("VERIFICATION TOTALS FOR:", file_name, "\n")
   cat("==========================================\n")
   
   check_totals <- final_df %>%
-    summarise(across(where(is.numeric), sum, na.rm = TRUE)) %>%
+    summarise(across(c(where(is.numeric), -hid2025), sum, na.rm = TRUE)) %>%
     pivot_longer(everything(), names_to = "Indicator", values_to = "National_Total")
   
   print(as.data.frame(check_totals))
+  
+  cat("\n--- FINAL TABLE PREVIEW:", file_name, "---\n")
+  print(as_tibble(final_df), n = 15)
   cat("==========================================\n\n")
   
   # 7. Export
   write.xlsx(final_df, 
              file = paste0(tab, file_name, ".xlsx"), 
-             sheetName = "hid", 
+             sheetName = "hid2025", 
              rowNames = FALSE, 
              overwrite = TRUE)
 }
-
-
 ## 3.3 POPPULATION TABLES ------------------------------------------------------
 ### Table P1. Population by 5–year age group by sex ----
 get_pop_map(pop$age_grp5) %>% print()
@@ -856,7 +896,7 @@ print_labels(pop$age_grp5)
 
 process_pop_sex_tab(
   data = pop, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "age_grp5", 
   file_name = "p1_age_5yrbands"
 )
@@ -867,7 +907,7 @@ get_pop_map(pop$ethnicity) %>% print()
 
 process_pop_sex_tab(
   data = pop, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "ethnicity", 
   file_name = "p2_ethnicity"
 )
@@ -878,7 +918,7 @@ cat_map <- get_pop_map(pop$citizenship) %>% print()
 
 process_pop_sex_tab(
   data = pop, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "citizenship", 
   file_name = "p3_citizen"
 )
@@ -888,7 +928,7 @@ cat_map <- get_pop_map(pop$relat) %>% print()
 
 process_pop_sex_tab(
   data = pop, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "relat", 
   file_name = "p4_relat"
 )
@@ -904,30 +944,22 @@ get_pop_map(pop15$mstatus) %>% print()
 
 process_pop_sex_tab(
   data = pop15, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "mstatus", 
   file_name = "p4_marital_status"
 )
 
 
-### Table P6a. Population by Individual classified as disabled (WG statistic, Min. 1/6 of Q ==3 or 4) ----
+
+### Table P6a. Population 5 years old and over by Difficulty in Seeing and by Sex ----
 pop5 <- pop %>%
   filter(age > 4)
 
-# 
-# process_pop_sex_tab(
-#   data = pop5, 
-#   backbone = codgeo, 
-#   var_name = "wg_disabled", 
-#   file_name = "p6a_wg_disabled"
-# )
-
-### Table P6a. Population 5 years old and over by Difficulty in Seeing and by Sex ----
 get_pop_map(pop$seeing) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "seeing", 
   file_name = "p6a_seeing"
 )
@@ -937,7 +969,7 @@ get_pop_map(pop$hearing) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "hearing", 
   file_name = "p6b_hearing"
 )
@@ -947,7 +979,7 @@ get_pop_map(pop$walking) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "walking", 
   file_name = "p6c_mobility"
 )
@@ -957,7 +989,7 @@ get_pop_map(pop$remembering) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "remembering", 
   file_name = "p6d_memory"
 )
@@ -967,7 +999,7 @@ get_pop_map(pop$selfcare) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "selfcare", 
   file_name = "p6e_sefcare"
 )
@@ -977,19 +1009,502 @@ get_pop_map(pop$communication) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "communication", 
   file_name = "p6f_communication"
 )
 
-### Table P7a. Population 5 years old and over by Some Difficulty (cut-off) ----
+### Table P7a. Population 5 years old and over by Some Difficulty (cut-off) and by sex----
 get_pop_map(pop$some_disab) %>% print()
 
 process_pop_sex_tab(
   data = pop5, 
-  backbone = codgeo, 
+  backbone = codgeo_pop, 
   var_name = "some_disab", 
   file_name = "p7a_some_disab"
 )
 
+### Table P7b. Population 5 years old and over by A lot of difficulty (cut-off) and by sex----
+get_pop_map(pop$alot_disab) %>% print()
 
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo_pop, 
+  var_name = "alot_disab", 
+  file_name = "p7b_alot_disab"
+)
+
+
+### Table P7c. Population 5 years old and over by Cannot do at all (cut-off) and by sex----
+get_pop_map(pop$cannot_disab) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo_pop, 
+  var_name = "cannot_disab", 
+  file_name = "p7c_cannot_disab"
+)
+
+### Table P8a. Population 10 years old and over by internet access and by sex ----
+pop10 <- pop %>%
+  filter(age > 9)
+
+get_pop_map(pop$internet_access) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo_pop, 
+  var_name = "internet_access", 
+  file_name = "p8_internet"
+)
+
+
+### Table P8a. Population 10 years old and over by internet access location and by sex ----
+get_pop_map(pop$location_internet) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo_pop, 
+  var_name = "location_internet", 
+  file_name = "p8b_inte_loc"
+)
+
+### Table P9. Population 10 years old and over by mobile phone and by sex ----
+get_pop_map(pop$mobile_phone) %>% print()
+
+process_pop_sex_tab(
+  data = pop10, 
+  backbone = codgeo_pop, 
+  var_name = "mobile_phone", 
+  file_name = "p9_mobile"
+)
+
+### Table P10. Population 3 years old and over ever attended to school by sex ----
+pop3 <- pop %>%
+  filter(age > 2)
+
+get_pop_map(pop$ever_attended) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "ever_attended", 
+  file_name = "p10_ever_attended"
+)
+
+### Table P11. Population 3 years old and over grade attended by sex ----
+get_pop_map(pop$grade_completed) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "grade_completed", 
+  file_name = "p11_grade_completed"
+)
+
+### Table P12. Population 3 years old and over currently attending to school by sex ----
+get_pop_map(pop$current_attend) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "current_attend", 
+  file_name = "p12_current_attend"
+)
+
+### Table P13.  Population 3 years old and over grade currently attending by sex ----
+get_pop_map(pop$grade_attending) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "grade_attending", 
+  file_name = "p13_grade_attending"
+)
+
+### Table P14. Population 3 years old and over by type of school attending by sex ----
+get_pop_map(pop$school_kind) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "school_kind", 
+  file_name = "p14_school_kind"
+)
+
+### Table P15. Population 5 years old and over reading and by sex ----
+get_pop_map(pop$reading) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo_pop, 
+  var_name = "reading", 
+  file_name = "p15_reading"
+)
+
+
+### Table P16. Population 5 years old and over writing and by sex ----
+get_pop_map(pop$writing) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo_pop, 
+  var_name = "writing", 
+  file_name = "p16_writing"
+)
+
+
+### Table P17. Population 5 years old and over literacy and by sex ----
+get_pop_map(pop$literacy) %>% print()
+
+process_pop_sex_tab(
+  data = pop5, 
+  backbone = codgeo_pop, 
+  var_name = "literacy", 
+  file_name = "p17_literacy"
+)
+
+### Table P18. Population 12 years old and over by Main Activity and by sex ----
+pop12 <- pop |> 
+  filter(age > 11)
+get_pop_map(pop$lf1) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "lf1", 
+  file_name = "p18_main_act"
+)
+
+### Table P19. Population 12 years old and over by Purpose of Main Activity and by sex ----
+get_pop_map(pop$lf2) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "lf2", 
+  file_name = "p19_pur_main_act"
+)
+
+### Table P20. Population 12 years old and over worked last week and by sex ----
+get_pop_map(pop$lf3) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "lf3", 
+  file_name = "p20_wrk_lweek"
+)
+
+### Table P21. Population 3 years old and over ILO aggregated education level ----
+get_pop_map(pop$ilo_edu_aggregate) %>% print()
+
+process_pop_sex_tab(
+  data = pop3, 
+  backbone = codgeo_pop, 
+  var_name = "ilo_edu_aggregate", 
+  file_name = "p21_ilo_educ"
+)
+
+### Table P22. Population 12 years old and over ILO employment ----
+get_pop_map(pop$ilo_lfs_emp) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "ilo_lfs_emp", 
+  file_name = "p22_ilo_lfs_emp"
+)
+
+### Table P23. Population 12 years old and over ILO looking for work ----
+get_pop_map(pop$ilo_lfs_notemp_activ) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "ilo_lfs_notemp_activ", 
+  file_name = "p23_ilo_lfwork"
+)
+
+
+### Table P24. Population 12 years old and over ILO willing to work ----
+get_pop_map(pop$ilo_lfs_notemp_avail) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "ilo_lfs_notemp_avail", 
+  file_name = "p24_ilo_will_wrk"
+)
+
+### Table P25. Population 12 years old and over ILO Labour Force Status ----
+get_pop_map(pop$ilo_lfs) %>% print()
+
+process_pop_sex_tab(
+  data = pop12, 
+  backbone = codgeo_pop, 
+  var_name = "ilo_lfs", 
+  file_name = "p25_ilo_lfs"
+)
+
+
+
+
+# 4. SOME HELP CREATING INDICATORS ON METADATA ---------------------------------
+## 4.1 Automating the  Household indicators generation ----
+
+# Setup paths
+table_folder <- tab
+files <- list.files(path = table_folder, pattern = "\\.xlsx$", full.names = FALSE)
+
+# Filter the list: Keep only files that DO NOT start with "p" (or "P")
+# The "^" symbol means "starts with"
+files_hh <- files[!grepl("^p", files, ignore.case = TRUE)]
+
+popgis_metadata_hh <- map_df(files_hh, function(f) {
+  
+  file_path <- file.path(table_folder, f)
+  headers <- names(read_excel(file_path, n_max = 0))
+  dataset_name <- str_remove(f, "\\.xlsx$")
+  
+  # Configuration
+  ignore_cols <- c("hid2025") 
+  denominator <- "total_hh" 
+  
+  # Include total_hh in the indicators list for the RAW rows
+  indicators <- headers[!headers %in% ignore_cols]
+  
+  # Build the Base "RAW" (R) rows
+  raw_rows <- tibble(
+    id_indicateur        = indicators,
+    id_dataset           = dataset_name,
+    id_themes            = dataset_name, 
+    theme_nomenc_filter  = NA_character_,
+    ordre                = NA_integer_,
+    typind               = "R",          
+    topo                 = "PG",         
+    formule              = NA_character_, 
+    classeslib           = NA_character_,
+    id_symb              = NA_character_,
+    # Leave these blank for now, we will mutate them after the join
+    lib_indicateur       = NA_character_,        
+    lib_indicateur_court = NA_character_, 
+    unite                = "hh",         
+    source               = "PLW-PHC",      
+    ss_indicat           = NA_character_,
+    ss_seuil             = NA_character_,
+    formule_lcl          = NA_character_,
+    formule_ucl          = NA_character_,
+    desc_indicateur      = NA_character_,
+    precisions           = NA_character_,
+    url_data             = NA_character_,
+    urllib_data          = NA_character_,
+    url_indicateur       = NA_character_,
+    urllib_indicateur    = NA_character_,
+    formula_indicat      = NA_character_,
+    url_logo             = NA_character_,
+    limutil_in           = NA_character_,
+    nbdec                = 0,            
+    published            = 1,            
+    essential            = 0,
+    highisbad            = 0,
+    diff_level           = 0,
+    indic_ass            = NA_character_,
+    id_view              = "map5|map6",  
+    id_colfam            = "GC_Blue",      
+    classes              = NA_character_,  
+    shape                = "sp",         
+    rdmax                = NA_character_,
+    falpha               = 70,           
+    method               = NA_character_,
+    drawsymb             = 0,
+    show_arr             = 1,
+    curve_lev            = "INTERM",
+    diverging            = NA_character_,
+    tjs_fwk              = NA_character_,
+    default_view         = 0,
+    opened               = 1,
+    output               = "A",
+    sort_key             = seq_along(indicators) * 2 - 1 
+  ) %>%
+    # --- NEW: Join the Dictionary and Assign Readable Names ---
+    left_join(master_labels, by = c("id_indicateur" = "db_name")) %>%
+    mutate(
+      # If readable_name is NA (e.g. for total_hh), fall back to replacing underscores
+      readable_name = coalesce(readable_name, str_to_title(str_replace_all(id_indicateur, "_", " "))),
+      lib_indicateur_court = id_indicateur,
+      lib_indicateur = paste("Number of", readable_name)
+    )
+  
+  # Build the "CALCULATED" (C) rows based on the Raw rows
+  calc_rows <- raw_rows %>%
+    filter(id_indicateur != denominator) %>% # REMOVE total_hh from percentage calculations
+    mutate(
+      # Build formulas and labels
+      formule              = paste0(id_indicateur, "/", denominator, "*100"),
+      lib_indicateur_court = paste0(id_indicateur, " (%)"),
+      # Inherit the exact readable_name we attached to the raw_rows above
+      lib_indicateur       = paste("Proportion of", readable_name),
+      
+      # Now append _pct to the ID
+      id_indicateur        = paste0(id_indicateur, "_pct"),
+      
+      # Apply other overrides
+      typind               = "C",
+      unite                = "%",
+      nbdec                = 2,              
+      shape                = NA_character_,  
+      falpha               = NA_real_,       
+      id_colfam            = "GC_YelReds",   
+      classes              = "5",            
+      sort_key             = sort_key + 1
+    )
+  
+  # Combine, sort, and drop the temporary readable_name column
+  bind_rows(raw_rows, calc_rows) %>%
+    select(-readable_name)
+  
+}) %>%
+  arrange(id_dataset, sort_key) %>% 
+  mutate(ordre = row_number()) %>%   
+  select(-sort_key)
+
+view(popgis_metadata_hh)
+
+# Export to Excel
+write_xlsx(popgis_metadata_hh, paste0(dd,"metadata/Metadata_Template_hh.xlsx"))
+
+
+## 4.2 Automating Population indicators -----
+
+# 1. Isolate datasets starting with "p" (or "P")
+files_p <- files[grepl("^p", files, ignore.case = TRUE)]
+
+# 2. Loop through the POPULATION files
+popgis_metadata_pop <- map_df(files_p, function(f) {
+  
+  file_path <- file.path(tab, f)
+  headers <- names(read_excel(file_path, n_max = 0))
+  dataset_name <- str_remove(f, "\\.xlsx$")
+  
+  # Configuration
+  ignore_cols <- c("hid2025") 
+  
+  # Set your actual total columns here
+  total_t <- "t_pop"  # Denominator for t_ indicators (total population)
+  total_m <- "m_pop"  # Denominator for m_ indicators (male population)
+  total_f <- "f_pop"  # Denominator for f_ indicators (female population)
+  
+  # Combine them into a list so we can exclude them from percentage calculations
+  denominators <- c(total_t, total_m, total_f)
+  
+  # Base indicators
+  indicators <- headers[!headers %in% ignore_cols]
+  
+  # 3. Build the Base "RAW" (R) rows
+  raw_rows <- tibble(
+    id_indicateur        = indicators,
+    id_dataset           = dataset_name,
+    id_themes            = dataset_name, 
+    theme_nomenc_filter  = NA_character_,
+    ordre                = NA_integer_,
+    typind               = "R",          
+    topo                 = "PG",         
+    formule              = NA_character_, 
+    classeslib           = NA_character_,
+    id_symb              = NA_character_,
+    lib_indicateur       = NA_character_, # Handled in mutate below       
+    lib_indicateur_court = NA_character_, # Handled in mutate below
+    unite                = "pers",       
+    source               = "PLW-PHC",      
+    ss_indicat           = NA_character_,
+    ss_seuil             = NA_character_,
+    formule_lcl          = NA_character_,
+    formule_ucl          = NA_character_,
+    desc_indicateur      = NA_character_,
+    precisions           = NA_character_,
+    url_data             = NA_character_,
+    urllib_data          = NA_character_,
+    url_indicateur       = NA_character_,
+    urllib_indicateur    = NA_character_,
+    formula_indicat      = NA_character_,
+    url_logo             = NA_character_,
+    limutil_in           = NA_character_,
+    nbdec                = 0,            
+    published            = 1,            
+    essential            = 0,
+    highisbad            = 0,
+    diff_level           = 0,
+    indic_ass            = NA_character_,
+    id_view              = "map5|map6",  
+    id_colfam            = "GC_Blue",      
+    classes              = NA_character_,  
+    shape                = "sp",         
+    rdmax                = NA_character_,
+    falpha               = 70,           
+    method               = NA_character_,
+    drawsymb             = 0,
+    show_arr             = 1,
+    curve_lev            = "INTERM",
+    diverging            = NA_character_,
+    tjs_fwk              = NA_character_,
+    default_view         = 0,
+    opened               = 1,
+    output               = "A",
+    
+    sort_key             = seq_along(indicators) * 2 - 1 
+  ) %>%
+    # --- NEW: Join the Dictionary and Assign Readable Names ---
+    left_join(master_labels, by = c("id_indicateur" = "db_name")) %>%
+    mutate(
+      # If readable_name is NA (e.g. for t_pop, m_pop), fall back to replacing underscores
+      readable_name = coalesce(readable_name, str_to_title(str_replace_all(id_indicateur, "_", " "))),
+      lib_indicateur_court = id_indicateur,
+      lib_indicateur = paste("Number of", readable_name)
+    )
+  
+  # 4. Build the "CALCULATED" (C) rows based on the Raw rows
+  calc_rows <- raw_rows %>%
+    filter(!id_indicateur %in% denominators) %>% # REMOVE all total columns from percentage calculations
+    mutate(
+      # Dynamically assign the correct denominator based on prefix
+      target_denom = case_when(
+        str_starts(id_indicateur, "t_") ~ total_t,
+        str_starts(id_indicateur, "m_") ~ total_m,
+        str_starts(id_indicateur, "f_") ~ total_f,
+        TRUE ~ total_t # Fallback to total pop if no prefix matches
+      ),
+      
+      # Build formulas using the dynamic denominator
+      formule              = paste0(id_indicateur, "/", target_denom, "*100"),
+      lib_indicateur_court = paste0(id_indicateur, " (%)"),
+      # Inherit the exact readable_name we attached to the raw_rows above
+      lib_indicateur       = paste("Proportion of", readable_name),
+      
+      # Now append _pct to the ID
+      id_indicateur        = paste0(id_indicateur, "_pct"),
+      
+      # Apply other overrides
+      typind               = "C",
+      unite                = "%",
+      nbdec                = 2,              
+      shape                = NA_character_,  
+      falpha               = NA_real_,       
+      id_colfam            = "GC_YelReds",   
+      classes              = "5",            
+      sort_key             = sort_key + 1
+    ) %>%
+    select(-target_denom) # Drop the temporary target_denom column
+  
+  # 5. Combine, sort, and drop the temporary readable_name column
+  bind_rows(raw_rows, calc_rows) %>%
+    select(-readable_name)
+  
+}) %>%
+  arrange(id_dataset, sort_key) %>% 
+  mutate(ordre = row_number()) %>%   
+  select(-sort_key)
+
+view(popgis_metadata_pop)
+# Export to Excel
+write_xlsx(popgis_metadata_pop, paste0(dd,"metadata/popgis_metadata_pop.xlsx"))
